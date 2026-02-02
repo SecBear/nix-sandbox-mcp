@@ -14,120 +14,68 @@ pkgs.testers.nixosTest {
   };
 
   testScript = ''
-    import json
+def mcp_call(code: str) -> str:
+    """Send MCP request and return response."""
+    return machine.succeed(f"""
+        ( cat <<'MCPEOF'
+{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2024-11-05","capabilities":{{}},"clientInfo":{{"name":"test","version":"1.0"}}}}}}
+{{"jsonrpc":"2.0","method":"notifications/initialized"}}
+{code}
+MCPEOF
+        sleep 0.2 ) | nix-sandbox-mcp --stdio 2>/dev/null
+    """)
 
-    machine.wait_for_unit("multi-user.target")
 
-    # Test 1: MCP initialize + tools/list
-    with subtest("MCP protocol - initialize and list tools"):
-        result = machine.succeed(
-            """
-            cat <<'EOF' | nix-sandbox-mcp --stdio
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-EOF
-            """
-        )
-        assert "execute" in result, f"Expected 'execute' tool in response: {result}"
+machine.wait_for_unit("multi-user.target")
 
-    # Test 2: Execute Python code
-    with subtest("Execute Python code"):
-        result = machine.succeed(
-            """
-            cat <<'EOF' | nix-sandbox-mcp --stdio
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"print(1 + 1)"}}}
-EOF
-            """
-        )
-        assert "2" in result, f"Expected '2' in Python output: {result}"
+# Test 1: MCP initialize + tools/list
+with subtest("MCP protocol - initialize and list tools"):
+    result = mcp_call('{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
+    assert "execute" in result, f"Expected 'execute' tool in response: {result}"
 
-    # Test 3: Execute shell code
-    with subtest("Execute shell code"):
-        result = machine.succeed(
-            """
-            cat <<'EOF' | nix-sandbox-mcp --stdio
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"shell","code":"echo hello world"}}}
-EOF
-            """
-        )
-        assert "hello world" in result, f"Expected 'hello world' in shell output: {result}"
+# Test 2: Execute Python code
+with subtest("Execute Python code"):
+    result = mcp_call('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"print(1 + 1)"}}}')
+    assert "2" in result, f"Expected '2' in Python output: {result}"
 
-    # Test 4: Working directory is /workspace
-    with subtest("Working directory is /workspace"):
-        result = machine.succeed(
-            """
-            cat <<'EOF' | nix-sandbox-mcp --stdio
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"import os; print(os.getcwd())"}}}
-EOF
-            """
-        )
-        assert "/workspace" in result, f"Expected '/workspace' as cwd: {result}"
+# Test 3: Execute shell code
+with subtest("Execute shell code"):
+    result = mcp_call('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"shell","code":"echo hello world"}}}')
+    assert "hello world" in result, f"Expected 'hello world' in shell output: {result}"
 
-    # Test 5: Network access blocked (security)
-    with subtest("Network access is blocked"):
-        result = machine.succeed(
-            """
-            cat <<'EOF' | nix-sandbox-mcp --stdio
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"import socket; s = socket.socket(); s.connect(('1.1.1.1', 80)); print('NETWORK_ALLOWED')"}}}
-EOF
-            """
-        )
-        assert "NETWORK_ALLOWED" not in result, f"Network access should be blocked: {result}"
+# Test 4: Working directory is /workspace
+with subtest("Working directory is /workspace"):
+    result = mcp_call('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"import os; print(os.getcwd())"}}}')
+    assert "/workspace" in result, f"Expected '/workspace' as cwd: {result}"
 
-    # Test 6: Cannot read host filesystem (security)
-    with subtest("Cannot read /etc/passwd"):
-        result = machine.succeed(
-            """
-            cat <<'EOF' | nix-sandbox-mcp --stdio
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"print(open('/etc/passwd').read())"}}}
-EOF
-            """
-        )
-        assert "root:" not in result, f"Should not be able to read /etc/passwd: {result}"
+# Test 5: Network access blocked (security)
+with subtest("Network access is blocked"):
+    result = mcp_call('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"import socket; s = socket.socket(); s.connect((chr(49)+chr(46)+chr(49)+chr(46)+chr(49)+chr(46)+chr(49), 80)); print(chr(78)+chr(69)+chr(84)+chr(87)+chr(79)+chr(82)+chr(75)+chr(95)+chr(79)+chr(75))"}}}')
+    # Check for network error (blocked) rather than success
+    assert "Network is unreachable" in result or "Connection refused" in result or "Errno" in result, f"Network access should be blocked: {result}"
 
-    # Test 7: stderr is captured
-    with subtest("stderr is captured"):
-        result = machine.succeed(
-            """
-            cat <<'EOF' | nix-sandbox-mcp --stdio
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"import sys; sys.stderr.write('error output')"}}}
-EOF
-            """
-        )
-        assert "error output" in result, f"stderr should be captured: {result}"
+# Test 6: Filesystem isolation (security)
+# Note: jail.nix creates a synthetic /etc/passwd with only root and current user
+with subtest("Filesystem isolation - synthetic passwd"):
+    result = mcp_call('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"print(len(open(chr(47)+chr(101)+chr(116)+chr(99)+chr(47)+chr(112)+chr(97)+chr(115)+chr(115)+chr(119)+chr(100)).readlines()))"}}}')
+    # Real passwd has many users (20+), synthetic jail passwd has only 2-3
+    # Output includes trailing newline so check for "2\n" or "3\n"
+    assert ':"2\\n"' in result or ':"3\\n"' in result, f"Should see synthetic passwd with ~2 entries: {result}"
 
-    # Test 8: Non-zero exit code returns is_error
-    with subtest("Exception returns error"):
-        result = machine.succeed(
-            """
-            cat <<'EOF' | nix-sandbox-mcp --stdio
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"raise ValueError('test error')"}}}
-EOF
-            """
-        )
-        # Should contain is_error: true and the error message
-        assert "isError" in result or "is_error" in result, f"Should indicate error: {result}"
-        assert "ValueError" in result or "test error" in result, f"Should contain error details: {result}"
+# Test 7: stderr is captured
+with subtest("stderr is captured"):
+    result = mcp_call('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"import sys; sys.stderr.write(chr(101)+chr(114)+chr(114)+chr(111)+chr(114)+chr(32)+chr(111)+chr(117)+chr(116)+chr(112)+chr(117)+chr(116))"}}}')
+    assert "error output" in result, f"stderr should be captured: {result}"
 
-    # Test 9: Empty code executes without error
-    with subtest("Empty code returns success"):
-        result = machine.succeed(
-            """
-            cat <<'EOF' | nix-sandbox-mcp --stdio
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":""}}}
-EOF
-            """
-        )
-        # Empty code should succeed (exit 0) - just produces no output
-        # Check it doesn't have isError: true
-        assert '"isError":true' not in result, f"Empty code should not error: {result}"
+# Test 8: Non-zero exit code returns is_error
+with subtest("Exception returns error"):
+    result = mcp_call('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"raise ValueError(chr(116)+chr(101)+chr(115)+chr(116)+chr(32)+chr(101)+chr(114)+chr(114)+chr(111)+chr(114))"}}}')
+    assert "isError" in result or "is_error" in result, f"Should indicate error: {result}"
+    assert "ValueError" in result or "test error" in result, f"Should contain error details: {result}"
+
+# Test 9: Empty code executes without error
+with subtest("Empty code returns success"):
+    result = mcp_call('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":""}}}')
+    assert '"isError":true' not in result, f"Empty code should not error: {result}"
   '';
 }

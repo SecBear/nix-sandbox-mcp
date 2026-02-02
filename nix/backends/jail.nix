@@ -1,7 +1,7 @@
 # jail.nix backend - wraps environments in bubblewrap sandboxes
 { pkgs, jail }:
 
-{
+rec {
   # Create a jailed wrapper for an environment
   # Returns a derivation with /bin/run that:
   #   1. Reads code from stdin
@@ -22,23 +22,25 @@
     let
       # The runner script that executes inside the jail
       # Note: interpreter commands (python3, bash, node) are available via add-pkg-deps
+      # Use writeShellScriptBin to create a package with bin/ structure as expected by jail.nix
       runnerScript = if stdinMode == "arg" then
-        pkgs.writeShellScript "runner-${name}" ''
+        pkgs.writeShellScriptBin "runner-${name}" ''
           set -euo pipefail
           cd /workspace
           code="$(cat)"
           exec ${interpreter} "$code"
         ''
       else
-        pkgs.writeShellScript "runner-${name}" ''
+        pkgs.writeShellScriptBin "runner-${name}" ''
           set -euo pipefail
           cd /workspace
           exec ${interpreter}
         '';
 
       # Wrap with jail.nix
-      # jail returns a derivation whose output IS the executable script
-      jailed = jail "sandbox-${name}" runnerScript (c: [
+      # jail returns a derivation with bin/sandbox-${name} executable
+      # Pass the explicit path to the runner script executable
+      jailed = jail "sandbox-${name}" "${runnerScript}/bin/runner-${name}" (c: [
         # Minimal base: fake /proc, /dev, coreutils, bash
         c.base
 
@@ -59,10 +61,10 @@
       ]);
     in
       # Return derivation with /bin/run pointing to the jailed script
-      # ${jailed} is the executable script itself (not a directory)
+      # ${jailed} is a derivation with bin/sandbox-${name} executable
       pkgs.runCommand "jailed-${name}" { } ''
         mkdir -p $out/bin
-        ln -s ${jailed} $out/bin/run
+        ln -s ${jailed}/bin/sandbox-${name} $out/bin/run
       '';
 
   # Convenience wrappers for common interpreters
