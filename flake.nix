@@ -53,6 +53,13 @@
 
           presets = if isLinux then import ./nix/environments { inherit pkgs; } else { };
 
+          daemon = pkgs.rustPlatform.buildRustPackage {
+            pname = "nix-sandbox-mcp-daemon";
+            version = "0.1.0";
+            src = ./daemon;
+            cargoLock.lockFile = ./daemon/Cargo.lock;
+          };
+
           mkServer =
             configPath:
             let
@@ -62,7 +69,7 @@
             in
             pkgs.writeShellApplication {
               name = "nix-sandbox-mcp";
-              runtimeInputs = [ self'.packages.daemon ] ++ built.drvs;
+              runtimeInputs = [ daemon ] ++ built.drvs;
               text = ''
                 export NIX_SANDBOX_METADATA='${built.metadataJson}'
                 exec nix-sandbox-mcp-daemon "$@"
@@ -81,15 +88,42 @@
           # ─────────────────────────────────────────────────────────
 
           packages = {
-            daemon = pkgs.rustPlatform.buildRustPackage {
-              pname = "nix-sandbox-mcp-daemon";
-              version = "0.1.0";
-              src = ./daemon;
-              cargoLock.lockFile = ./daemon/Cargo.lock;
+            inherit daemon;
+            default = if isLinux then mkServer ./config.example.toml else daemon;
+          } // pkgs.lib.optionalAttrs isLinux {
+            # Expose presets for direct building/testing
+            "presets.shell" = presets.shell;
+            "presets.python" = presets.python;
+            "presets.node" = presets.node;
+          };
+
+          # Debug outputs for development
+          debug = pkgs.lib.optionalAttrs isLinux {
+            # Raw TOML parsing result
+            fromToml = import ./nix/lib/fromToml.nix {
+              inherit pkgs jail presets;
+            } ./config.example.toml;
+
+            # Just the metadata
+            metadata = (import ./nix/lib/fromToml.nix {
+              inherit pkgs jail presets;
+            } ./config.example.toml).metadata;
+
+            # Individual environments
+            environments = (import ./nix/lib/fromToml.nix {
+              inherit pkgs jail presets;
+            } ./config.example.toml).environments;
+
+            # Presets
+            inherit presets;
+          };
+
+          # Integration tests
+          checks = pkgs.lib.optionalAttrs isLinux {
+            integration = import ./nix/tests {
+              inherit pkgs;
+              mcpServer = mkServer ./config.example.toml;
             };
-          }
-          // pkgs.lib.optionalAttrs isLinux {
-            default = mkServer ./config.example.toml;
           };
 
           # ─────────────────────────────────────────────────────────

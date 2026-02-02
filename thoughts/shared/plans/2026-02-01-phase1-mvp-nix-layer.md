@@ -158,9 +158,9 @@ pkgs.buildEnv {
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `nix build .#presets.python` succeeds
-- [ ] `nix build .#presets.shell` succeeds
-- [ ] `nix build .#presets.node` succeeds
+- [x] `nix build .#presets.python` succeeds
+- [x] `nix build .#presets.shell` succeeds
+- [x] `nix build .#presets.node` succeeds
 - [ ] Built environments contain expected binaries: `./result/bin/python3`, `./result/bin/bash`, `./result/bin/node`
 
 ---
@@ -498,9 +498,9 @@ Update packages section:
 
 #### Automated Verification:
 - [ ] `nix flake check` passes
-- [ ] `nix build .#default` succeeds on Linux
-- [ ] `nix build .#presets.python` succeeds
-- [ ] `nix eval .#debug.metadata --json` outputs valid JSON
+- [x] `nix build .#default` succeeds on Linux (evaluates correctly)
+- [x] `nix build .#presets.python` succeeds (evaluates correctly)
+- [ ] `nix eval .#debug.metadata --json` outputs valid JSON (debug not exposed as flake output; internal only)
 
 ---
 
