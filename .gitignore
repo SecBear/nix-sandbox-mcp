@@ -1,0 +1,17 @@
+# Nix
+result
+result-*
+
+# direnv
+.direnv/
+
+# Rust
+daemon/target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+

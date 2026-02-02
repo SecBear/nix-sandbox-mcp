@@ -1,0 +1,60 @@
+# nix-sandbox-mcp configuration
+# 
+# This file defines which environments are available and how they're sandboxed.
+
+[daemon]
+transport = "stdio"
+log_level = "info"
+
+[defaults]
+backend = "jail"          # "jail" (fast, namespace isolation) or "microvm" (secure, VM isolation)
+timeout_seconds = 30      # Maximum execution time per invocation
+memory_mb = 512           # Memory limit for sandbox
+
+# ─────────────────────────────────────────────────────────────────
+# Environments
+#
+# Each environment defines what tools/packages are available.
+# Use 'preset' for bundled environments or 'flake' for custom ones.
+# ─────────────────────────────────────────────────────────────────
+
+[environments.shell]
+preset = "shell"
+# Minimal Linux shell: coreutils, bash, grep, sed, awk, jq, curl
+
+[environments.python]
+preset = "python"
+# Python 3 with standard library
+
+[environments.node]
+preset = "node"
+# Node.js 22 runtime
+
+# ─────────────────────────────────────────────────────────────────
+# Custom environments (examples - uncomment to use)
+# ─────────────────────────────────────────────────────────────────
+
+# Reference your own flake
+# [environments.dev]
+# flake = "github:myorg/dev-envs#default"
+
+# Local project flake
+# [environments.project]
+# flake = "/home/user/myproject#sandbox"
+
+# Use microVM for untrusted code
+# [environments.untrusted]
+# flake = "github:someone/env#thing"
+# backend = "microvm"
+# memory_mb = 1024
+
+# ─────────────────────────────────────────────────────────────────
+# Backend Configuration
+# ─────────────────────────────────────────────────────────────────
+
+[backends.jail]
+# jail.nix (bubblewrap) settings
+# Default combinators provide: tmpfs home, no network, isolated namespaces
+
+[backends.microvm]
+hypervisor = "cloud-hypervisor"  # "cloud-hypervisor" | "qemu" | "firecracker"
