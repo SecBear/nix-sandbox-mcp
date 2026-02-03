@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nix-sandbox": {
+      "command": "./result/bin/nix-sandbox-mcp",
+      "args": ["--stdio"]
+    }
+  }
+}
