@@ -72,20 +72,32 @@ Command::new(interpreter).arg("-c").arg(code)  // No shell metacharacters
 }
 ```
 
-### Environment Detection Patterns
+### Environment Selection Pattern
 
-**AGENTS.md Standard (60,000+ projects):**
-- "README for agents" - dedicated project context file
-- Contains build steps, tests, conventions not relevant to humans
-- Nearest AGENTS.md in directory tree takes priority
+**Decision: No Auto-Detection**
 
-**Recommended Detection Hierarchy:**
-1. Read `AGENTS.md` for explicit commands (highest priority)
-2. Check `[project] use_flake = true` for devShell
-3. Detect toolchain from files (package.json, Cargo.toml, etc.)
-4. Fall back to auto-detection from command content
+After analysis, we chose explicit environment selection over auto-detection:
+- Auto-detection heuristics are fragile (`cargo build` - shell or rust?)
+- Can't detect *intent*, only text patterns
+- Claude excels at task reasoning - let it choose
 
-**Implementation Insight:** Our `detect_environment()` function should check for AGENTS.md and project flake before falling back to command-based heuristics.
+**How Claude Chooses:**
+1. Reads tool description listing available environments
+2. Understands the user's task
+3. Selects appropriate environment explicitly
+
+**Example Flow:**
+```
+User: "Calculate first 100 primes"
+Claude thinks: "I need Python for computation"
+Claude calls: run(command="...", environment="python")
+
+User: "Run our tests"
+Claude thinks: "pytest is a shell command"
+Claude calls: run(command="pytest tests/", environment="shell")
+```
+
+This matches Claude Code's existing pattern of choosing between Bash/Read/Write tools.
 
 ### Agentic Workflow Patterns
 
@@ -152,12 +164,12 @@ fn get_tool_description(&self) -> String {
 
 ### Key Takeaways for Phase 2a
 
-1. **Keep command-based detection but add AGENTS.md awareness**
-2. **Error messages must be actionable** - tell the LLM what to try next
-3. **Dynamic tool descriptions** reflecting actual config state
+1. **No auto-detection** - Claude explicitly selects environment (required param)
+2. **Error messages must be actionable** - list available environments on error
+3. **Dynamic tool descriptions** - list available environments to help Claude choose
 4. **No shell injection** - execute commands directly, not through shell
-5. **File-scoped preference** - consider surfacing in tool description
-6. **Flake refs from config only** - correct security boundary (already planned)
+5. **Flake refs from config only** - correct security boundary (already planned)
+6. **Trust Claude's reasoning** - same pattern as Bash/Read/Write tool selection
 
 ---
 
@@ -201,25 +213,39 @@ vars = ["DATABASE_URL", "RUST_LOG"]
 
 ### 2a.1: New `run` Tool Interface
 
+#### Design Decision: No Auto-Detection
+
+**We explicitly chose NOT to auto-detect environments.** Instead:
+- `environment` is a **required** parameter
+- Claude selects the appropriate environment based on task reasoning
+- Dynamic tool description lists available environments to help Claude choose
+
+**Rationale:**
+- Auto-detection heuristics are fragile and error-prone
+- Claude excels at task reasoning (same pattern as choosing Bash vs Read vs Write)
+- Explicit selection is more predictable and debuggable
+- If Claude picks wrong, it sees the error and self-corrects
+- Matches industry patterns (E2B, Modal use explicit selection)
+
 #### Tool Schema
 
 ```json
 {
   "name": "run",
-  "description": "Run a command in an isolated Nix sandbox",
+  "description": "Run a command in an isolated Nix sandbox.\n\nAvailable environments:\n- python: Python 3 with standard library\n- node: Node.js runtime\n- shell: Bash with coreutils, curl, jq\n\nChoose the environment that has the tools needed for your command.",
   "inputSchema": {
     "type": "object",
     "properties": {
       "command": {
         "type": "string",
-        "description": "Command to run (auto-detects environment)"
+        "description": "The command to run"
       },
       "environment": {
         "type": "string",
-        "description": "Override auto-detection: 'python', 'node', 'shell'"
+        "description": "Execution environment (required): python, node, shell, or custom"
       }
     },
-    "required": ["command"]
+    "required": ["command", "environment"]
   }
 }
 ```
@@ -231,10 +257,10 @@ vars = ["DATABASE_URL", "RUST_LOG"]
 ```rust
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunParams {
-    /// Command to run
+    /// The command to run
     pub command: String,
-    /// Override environment auto-detection
-    pub environment: Option<String>,
+    /// Execution environment (required)
+    pub environment: String,
 }
 
 #[tool(description = "Run a command in an isolated Nix sandbox")]
@@ -242,9 +268,7 @@ async fn run(
     &self,
     Parameters(params): Parameters<RunParams>,
 ) -> Result<CallToolResult, McpError> {
-    let env_name = params.environment
-        .as_deref()
-        .unwrap_or_else(|| detect_environment(&params.command));
+    let env_name = &params.environment;
 
     let env = self.config.environments.get(env_name).ok_or_else(|| {
         let available: Vec<_> = self.config.environments.keys().collect();
@@ -258,30 +282,7 @@ async fn run(
 }
 ```
 
-**File:** `daemon/src/detect.rs` (new)
-
-```rust
-pub fn detect_environment(command: &str) -> &'static str {
-    let cmd = command.trim().to_lowercase();
-
-    // Python indicators
-    if cmd.starts_with("python") || cmd.starts_with("pip") || cmd.starts_with("pytest")
-        || cmd.contains("import ") || cmd.contains("print(") || cmd.ends_with(".py")
-    {
-        return "python";
-    }
-
-    // Node indicators
-    if cmd.starts_with("node") || cmd.starts_with("npm") || cmd.starts_with("npx")
-        || cmd.contains("console.log") || cmd.contains("require(")
-    {
-        return "node";
-    }
-
-    // Default to shell
-    "shell"
-}
-```
+**No detect.rs needed** - environment selection is Claude's responsibility.
 
 #### Breaking Change
 
@@ -289,11 +290,11 @@ The `execute` tool is removed. This is intentional—Phase 1 just shipped, no ex
 
 #### Success Criteria
 
-- [ ] `run(command: "print(1)")` auto-detects python, returns "1"
-- [ ] `run(command: "echo hi")` auto-detects shell, returns "hi"
-- [ ] `run(command: "console.log(1)")` auto-detects node, returns "1"
-- [ ] `run(command: "...", environment: "python")` respects override
-- [ ] Unknown environment returns helpful error
+- [ ] `run(command: "print(1)", environment: "python")` returns "1"
+- [ ] `run(command: "echo hi", environment: "shell")` returns "hi"
+- [ ] `run(command: "console.log(1)", environment: "node")` returns "1"
+- [ ] Unknown environment returns helpful error with available options
+- [ ] Tool description dynamically lists available environments
 
 ---
 
@@ -707,14 +708,15 @@ assert_contains "$response" "timeout" "Timeout works"
 
 | File | Action | Description |
 |------|--------|-------------|
-| `daemon/src/mcp.rs` | Modify | New `run` tool, dynamic description |
-| `daemon/src/detect.rs` | Create | Environment auto-detection |
+| `daemon/src/mcp.rs` | Modify | New `run` tool (replaces execute), dynamic description |
 | `daemon/src/config.rs` | Modify | Project config, mount mode |
-| `daemon/src/backend/jail.rs` | Modify | Timeout enforcement |
+| `daemon/src/backend/jail.rs` | Modify | Timeout error message improvement |
 | `nix/backends/jail.nix` | Modify | Project mounting, env inheritance |
 | `nix/lib/fromToml.nix` | Modify | Flake refs, project env |
 | `config.example.toml` | Modify | New project section |
 | `test-local.sh` | Modify | Phase 2a tests |
+
+Note: No `detect.rs` needed - environment selection is Claude's responsibility via required parameter.
 
 ---
 

@@ -25,16 +25,17 @@ pub struct SandboxServer<B: Clone> {
     tool_router: ToolRouter<Self>,
 }
 
-/// Parameters for the execute tool.
+/// Parameters for the run tool.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct ExecuteParams {
-    /// The sandbox environment to use (e.g., "python", "shell", "node").
-    #[schemars(description = "The sandbox environment to use (e.g., 'python', 'shell', 'node')")]
-    pub environment: String,
+pub struct RunParams {
+    /// The command to run in the sandbox.
+    #[schemars(description = "The command to run in the sandbox")]
+    pub command: String,
 
-    /// The code to execute in the sandbox.
-    #[schemars(description = "The code to execute in the sandbox")]
-    pub code: String,
+    /// The execution environment to use (e.g., "python", "shell", "node").
+    /// Required - choose based on what tools the command needs.
+    #[schemars(description = "Execution environment (required): python, node, shell, or custom")]
+    pub environment: String,
 }
 
 #[tool_router]
@@ -48,14 +49,14 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> SandboxServer<B> {
         }
     }
 
-    /// Execute code in the specified sandbox environment.
-    #[tool(description = "Execute code in a sandboxed Nix environment")]
-    async fn execute(
+    /// Run a command in the specified sandbox environment.
+    #[tool(description = "Run a command in an isolated Nix sandbox")]
+    async fn run(
         &self,
-        Parameters(params): Parameters<ExecuteParams>,
+        Parameters(params): Parameters<RunParams>,
     ) -> Result<CallToolResult, McpError> {
         let env_name = &params.environment;
-        let code = &params.code;
+        let command = &params.command;
 
         // Look up environment
         let env = self.config.environments.get(env_name).ok_or_else(|| {
@@ -66,10 +67,10 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> SandboxServer<B> {
             )
         })?;
 
-        info!(environment = %env_name, code_len = code.len(), "Executing code");
+        info!(environment = %env_name, command_len = command.len(), "Running command");
 
         // Execute in sandbox
-        match self.backend.execute(env, code).await {
+        match self.backend.execute(env, command).await {
             Ok(result) => {
                 let is_error = result.exit_code != 0;
 
@@ -103,6 +104,13 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> ServerHandler for Sand
     fn get_info(&self) -> ServerInfo {
         let envs: Vec<_> = self.config.environments.keys().collect();
 
+        // Build environment descriptions
+        let env_list = envs
+            .iter()
+            .map(|e| format!("- {e}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
         ServerInfo {
             protocol_version: rmcp::model::ProtocolVersion::V_2024_11_05,
             capabilities: ServerCapabilities::builder().enable_tools().build(),
@@ -114,12 +122,16 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> ServerHandler for Sand
                 website_url: None,
             },
             instructions: Some(format!(
-                "Execute code in isolated Nix-built sandbox environments.\n\
-                 Available environments: {envs:?}\n\
+                "Run commands in isolated Nix sandbox environments.\n\
                  \n\
-                 Use the 'execute' tool with:\n\
-                 - environment: one of {envs:?}\n\
-                 - code: the code to run"
+                 Available environments:\n\
+                 {env_list}\n\
+                 \n\
+                 Use the 'run' tool with:\n\
+                 - command: the command to run\n\
+                 - environment: one of the available environments (required)\n\
+                 \n\
+                 Choose the environment based on what tools your command needs."
             )),
         }
     }
@@ -163,11 +175,11 @@ mod tests {
         async fn execute(
             &self,
             _env: &EnvironmentMeta,
-            code: &str,
+            command: &str,
         ) -> anyhow::Result<ExecutionResult> {
             Ok(ExecutionResult {
                 exit_code: 0,
-                stdout: format!("executed: {code}"),
+                stdout: format!("executed: {command}"),
                 stderr: String::new(),
             })
         }
@@ -184,30 +196,33 @@ mod tests {
                 memory_mb: 512,
             },
         );
-        Config { environments }
+        Config {
+            environments,
+            project: None,
+        }
     }
 
     #[tokio::test]
-    async fn test_execute_success() {
+    async fn test_run_success() {
         let server = SandboxServer::new(test_config(), MockBackend);
-        let params = Parameters(ExecuteParams {
+        let params = Parameters(RunParams {
+            command: "echo hello".to_string(),
             environment: "test".to_string(),
-            code: "hello".to_string(),
         });
 
-        let result = server.execute(params).await.unwrap();
+        let result = server.run(params).await.unwrap();
         assert!(!result.is_error.unwrap_or(false));
     }
 
     #[tokio::test]
-    async fn test_execute_unknown_env() {
+    async fn test_run_unknown_env() {
         let server = SandboxServer::new(test_config(), MockBackend);
-        let params = Parameters(ExecuteParams {
+        let params = Parameters(RunParams {
+            command: "echo hello".to_string(),
             environment: "unknown".to_string(),
-            code: "hello".to_string(),
         });
 
-        let result = server.execute(params).await;
+        let result = server.run(params).await;
         assert!(result.is_err());
     }
 }

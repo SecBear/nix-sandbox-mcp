@@ -16,19 +16,19 @@ response=$(./result/bin/nix-sandbox-mcp --stdio <<'EOF'
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
 EOF
 )
-if echo "$response" | grep -q '"name":"execute"'; then
-  echo "  [PASS] tools/list returned execute tool"
+if echo "$response" | grep -q '"name":"run"'; then
+  echo "  [PASS] tools/list returned run tool"
 else
-  echo "  [FAIL] tools/list did not return execute tool"
+  echo "  [FAIL] tools/list did not return run tool"
   echo "$response"
   exit 1
 fi
 
-# Test 2: Execute Python code
-echo "Test 2: Execute Python code"
+# Test 2: Run Python code
+echo "Test 2: Run Python code"
 response=$(./result/bin/nix-sandbox-mcp --stdio <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"print(1 + 1)"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"print(1 + 1)","environment":"python"}}}
 EOF
 )
 if echo "$response" | grep -q '2'; then
@@ -39,11 +39,11 @@ else
   exit 1
 fi
 
-# Test 3: Execute shell code
-echo "Test 3: Execute shell code"
+# Test 3: Run shell code
+echo "Test 3: Run shell code"
 response=$(./result/bin/nix-sandbox-mcp --stdio <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"shell","code":"echo hello world"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"echo hello world","environment":"shell"}}}
 EOF
 )
 if echo "$response" | grep -q 'hello world'; then
@@ -61,7 +61,7 @@ echo "=== Quick Security Tests ==="
 echo "Test 4: Network access should be blocked"
 response=$(./result/bin/nix-sandbox-mcp --stdio <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"import socket; s = socket.socket(); s.connect(('1.1.1.1', 80)); print('NETWORK_ALLOWED')"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"import socket; s = socket.socket(); s.connect(('1.1.1.1', 80)); print('NETWORK_ALLOWED')","environment":"python"}}}
 EOF
 )
 if echo "$response" | grep -q 'NETWORK_ALLOWED'; then
@@ -75,7 +75,7 @@ fi
 echo "Test 5: Cannot read /etc/passwd"
 response=$(./result/bin/nix-sandbox-mcp --stdio <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"print(open('/etc/passwd').read())"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"print(open('/etc/passwd').read())","environment":"python"}}}
 EOF
 )
 if echo "$response" | grep -q 'root:'; then
@@ -92,7 +92,7 @@ echo "=== Edge Case Tests ==="
 echo "Test 6: stderr is captured"
 response=$(./result/bin/nix-sandbox-mcp --stdio <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"import sys; sys.stderr.write('error output')"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"import sys; sys.stderr.write('error output')","environment":"python"}}}
 EOF
 )
 if echo "$response" | grep -q 'error output'; then
@@ -107,7 +107,7 @@ fi
 echo "Test 7: Exception returns error"
 response=$(./result/bin/nix-sandbox-mcp --stdio <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"raise ValueError('test error')"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"raise ValueError('test error')","environment":"python"}}}
 EOF
 )
 if echo "$response" | grep -qi 'error\|ValueError'; then
@@ -118,19 +118,19 @@ else
   exit 1
 fi
 
-# Test 8: Empty code
-echo "Test 8: Empty code executes"
+# Test 8: Empty command
+echo "Test 8: Empty command executes"
 response=$(./result/bin/nix-sandbox-mcp --stdio <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":""}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"","environment":"python"}}}
 EOF
 )
 if echo "$response" | grep -q '"isError":true'; then
-  echo "  [FAIL] Empty code should not error"
+  echo "  [FAIL] Empty command should not error"
   echo "$response"
   exit 1
 else
-  echo "  [PASS] Empty code succeeds"
+  echo "  [PASS] Empty command succeeds"
 fi
 
 echo ""
