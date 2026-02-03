@@ -1,13 +1,12 @@
 # Testing Guide: nix-sandbox-mcp as MCP Server
 
-This guide covers how to test nix-sandbox-mcp with real MCP clients to evaluate the UX.
+Terminal-focused guide for testing nix-sandbox-mcp with MCP Inspector.
 
 ## Prerequisites
 
 - **Linux** (required for sandboxing; macOS can only build the daemon)
 - **Nix** with flakes enabled
-- **Claude Desktop** or another MCP client
-- Optionally: `mcp-inspector` for protocol debugging
+- **Node.js/npm** (for MCP Inspector)
 
 ## 1. Build the Server
 
@@ -23,7 +22,7 @@ ls -la result/bin/nix-sandbox-mcp
 
 ## 2. Quick Sanity Check (CLI)
 
-Before testing with Claude, verify the server works:
+Before using the inspector, verify the server works:
 
 ```bash
 # Run existing tests
@@ -38,257 +37,294 @@ EOF
 
 Expected: You should see the `execute` tool with its schema.
 
-## 3. Testing with mcp-inspector (Optional)
+## 3. Testing with MCP Inspector
 
-[mcp-inspector](https://github.com/anthropics/mcp-inspector) provides a UI for testing MCP servers.
+The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) is an interactive developer tool for testing MCP servers. It provides a web UI but runs from terminal.
 
-```bash
-# Install globally
-npm install -g @anthropic-ai/mcp-inspector
-
-# Run inspector against your server
-mcp-inspector ./result/bin/nix-sandbox-mcp --stdio
-```
-
-In the inspector:
-1. Connect to the server
-2. Browse available tools
-3. Try calling `execute` with different environments
-4. Observe response format and timing
-
-## 4. Testing with Claude Desktop
-
-### 4.1 Configure Claude Desktop
-
-Edit `~/.config/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "nix-sandbox": {
-      "command": "/Users/bear/dev/nix-sandbox-mcp/result/bin/nix-sandbox-mcp",
-      "args": ["--stdio"]
-    }
-  }
-}
-```
-
-**Alternative (builds fresh each time):**
-```json
-{
-  "mcpServers": {
-    "nix-sandbox": {
-      "command": "nix",
-      "args": ["run", "/Users/bear/dev/nix-sandbox-mcp", "--", "--stdio"]
-    }
-  }
-}
-```
-
-### 4.2 Restart Claude Desktop
-
-After editing config, restart Claude Desktop completely (quit and reopen).
-
-### 4.3 Verify Connection
-
-In Claude Desktop, you should see the MCP server icon in the chat input area. Click it to verify "nix-sandbox" is connected and `execute` tool is available.
-
-## 5. Evaluation Prompts
-
-Use these prompts to evaluate the UX. Note observations for each.
-
-### Category A: Basic Functionality
-
-**A1. Simple execution**
-> Write a Python one-liner that prints the first 10 Fibonacci numbers.
-
-*Observe: Does Claude naturally use the execute tool? Does it choose the right environment?*
-
-**A2. Environment switching**
-> First, use Python to calculate 2^100. Then use shell to list the contents of /workspace.
-
-*Observe: Does Claude switch environments smoothly? Is the output clear?*
-
-**A3. Multi-step computation**
-> Write a shell script that generates 5 random numbers, then use Python to calculate their average.
-
-*Observe: Can Claude handle multi-step workflows? Does it pass data between executions?*
-
-### Category B: Tool Discovery
-
-**B1. What can you do?**
-> What code execution capabilities do you have?
-
-*Observe: Does Claude accurately describe the available environments?*
-
-**B2. Implicit environment selection**
-> Run `console.log(Array.from({length: 5}, (_, i) => i*i))`
-
-*Observe: Does Claude infer the right environment (node) from the code?*
-
-**B3. Error on unknown environment**
-> Execute some Rust code for me: `fn main() { println!("hello"); }`
-
-*Observe: How does Claude handle environments that don't exist? Does the error message help?*
-
-### Category C: Error Handling
-
-**C1. Syntax error**
-> Run this Python: `print("hello`
-
-*Observe: Is the error message clear? Does Claude offer to fix it?*
-
-**C2. Runtime exception**
-> Use Python to open and read a file called /nonexistent/file.txt
-
-*Observe: How is the exception displayed? stdout vs stderr handling?*
-
-**C3. Security boundary**
-> Use Python to make an HTTP request to https://example.com
-
-*Observe: Does the sandbox block network access? Is the error understandable?*
-
-### Category D: Edge Cases
-
-**D1. Large output**
-> Use Python to print numbers 1 to 10000, one per line.
-
-*Observe: Does output get truncated? Is it readable?*
-
-**D2. Long-running code**
-> Write Python code that sleeps for 60 seconds then prints "done".
-
-*Observe: Does the timeout work? How is timeout communicated?*
-
-**D3. Interactive/input**
-> Write Python that asks for user input with input().
-
-*Observe: How is this handled? (Should fail/hang - stdin isn't connected)*
-
-### Category E: Real-World Tasks
-
-**E1. Data processing**
-> I have this JSON: `{"users": [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}]}`. Use Python to find the average age.
-
-*Observe: Natural workflow for data tasks?*
-
-**E2. Algorithm implementation**
-> Implement quicksort in Python and test it with [3,1,4,1,5,9,2,6].
-
-*Observe: Does Claude test its own code? Iterative refinement?*
-
-**E3. Shell scripting**
-> Use shell commands to create a simple directory structure with nested folders and files, then display it with tree or ls -R.
-
-*Observe: File system operations in sandbox?*
-
-## 6. What to Evaluate
-
-### UX Metrics
-
-| Metric | What to observe |
-|--------|-----------------|
-| **Discoverability** | Does Claude find and use the tool without prompting? |
-| **Environment selection** | Does Claude pick the right environment? Does it ever pick wrong? |
-| **Output clarity** | Is stdout/stderr clear? Is combined output confusing? |
-| **Error messages** | When things fail, are errors helpful? |
-| **Mental model** | Does single-tool-with-env-param feel natural? |
-| **Iteration** | Can Claude run, see error, fix, re-run smoothly? |
-
-### Potential Pain Points to Watch For
-
-1. **"Unknown environment" errors** - Does Claude try environments that don't exist?
-2. **Environment confusion** - Does Claude mix up what's available in each preset?
-3. **Output formatting** - Is the `stdout\n--- stderr ---\nstderr` format confusing?
-4. **No tool chaining** - Does Claude struggle without file persistence between calls?
-5. **Sandbox limitations** - Does lack of network/filesystem access frustrate legitimate use cases?
-
-### Alternative UX Ideas to Consider
-
-Based on testing, you might consider:
-
-| Current | Alternative | Trade-off |
-|---------|-------------|-----------|
-| Single `execute` tool | Per-language tools (`python`, `shell`, `node`) | More tools = more token overhead, but possibly better discoverability |
-| `environment` param | Infer from code | Less explicit, but might be more natural |
-| Combined stdout/stderr | Structured JSON response | Cleaner for parsing, but more complex for simple cases |
-| Static config | Runtime environment creation | More flexible, but loses Nix reproducibility guarantees |
-
-## 7. Recording Results
-
-Create a file to capture your observations:
+### 3.1 Launch Inspector
 
 ```bash
-# After each test session
+# Run inspector with your built server
+npx @modelcontextprotocol/inspector ./result/bin/nix-sandbox-mcp --stdio
+```
+
+This starts a local web server (typically http://localhost:5173) and opens it in your browser. If you're on a headless Linux machine, note the URL and access it remotely or use port forwarding.
+
+**Alternative: Build fresh each time**
+```bash
+npx @modelcontextprotocol/inspector nix run .# -- --stdio
+```
+
+### 3.2 Inspector Interface
+
+Once connected, the Inspector provides:
+
+| Tab | What it shows |
+|-----|---------------|
+| **Tools** | Lists available tools (`execute`), shows schema, lets you test with custom inputs |
+| **Resources** | Lists resources (none for this server) |
+| **Prompts** | Lists prompt templates (none for this server) |
+| **Notifications** | Server logs and notifications |
+
+### 3.3 Testing the execute Tool
+
+In the **Tools** tab:
+
+1. Click on `execute` tool
+2. Fill in the form:
+   - `environment`: `python` (or `shell`, `node`)
+   - `code`: `print("hello from sandbox")`
+3. Click "Run Tool"
+4. Observe the response
+
+### 3.4 Test Cases for Inspector
+
+Run these through the Inspector's Tools tab:
+
+**Basic execution:**
+```json
+{"environment": "python", "code": "print(sum(range(10)))"}
+```
+
+**Shell command:**
+```json
+{"environment": "shell", "code": "echo $HOME && pwd && whoami"}
+```
+
+**Node.js:**
+```json
+{"environment": "node", "code": "console.log(Array.from({length:5}, (_,i) => i*i))"}
+```
+
+**Error handling - syntax error:**
+```json
+{"environment": "python", "code": "print('unterminated"}
+```
+
+**Error handling - runtime exception:**
+```json
+{"environment": "python", "code": "raise ValueError('test error')"}
+```
+
+**Security - network blocked:**
+```json
+{"environment": "python", "code": "import socket; s = socket.socket(); s.connect(('1.1.1.1', 80))"}
+```
+
+**Security - filesystem isolated:**
+```json
+{"environment": "python", "code": "print(open('/etc/passwd').read())"}
+```
+
+**Edge case - stderr capture:**
+```json
+{"environment": "python", "code": "import sys; print('stdout'); sys.stderr.write('stderr')"}
+```
+
+**Edge case - unknown environment:**
+```json
+{"environment": "rust", "code": "fn main() {}"}
+```
+
+## 4. Raw CLI Testing (No Inspector)
+
+For quick iteration without the Inspector UI:
+
+### 4.1 Interactive Session Script
+
+```bash
+#!/bin/bash
+# Save as test-interactive.sh
+
+SERVER="./result/bin/nix-sandbox-mcp --stdio"
+
+# Initialize
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli-test","version":"1.0"}}}' | $SERVER
+
+# List tools
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | $SERVER
+
+# Execute Python
+echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"print(2**100)"}}}' | $SERVER
+```
+
+### 4.2 One-liner Tests
+
+```bash
+# Python calculation
+./result/bin/nix-sandbox-mcp --stdio <<< '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"import math; print(math.factorial(20))"}}}'
+
+# Shell - check working directory
+./result/bin/nix-sandbox-mcp --stdio <<< '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"shell","code":"pwd && ls -la"}}}'
+```
+
+### 4.3 Pretty-print Output
+
+Pipe through `jq` for readable output:
+
+```bash
+./result/bin/nix-sandbox-mcp --stdio <<'EOF' 2>/dev/null | jq -s '.[-1]'
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"for i in range(5): print(f'Line {i}')"}}}
+EOF
+```
+
+## 5. What to Evaluate
+
+### UX Questions
+
+| Question | How to test |
+|----------|-------------|
+| Is the tool schema clear? | Check `tools/list` response - does schema explain environment options? |
+| Are errors helpful? | Try invalid environment, syntax errors, runtime errors |
+| Is output format good? | Check stdout/stderr combined format: `stdout\n--- stderr ---\nstderr` |
+| Is security working? | Try network access, reading /etc/passwd |
+| What about timeouts? | Try `import time; time.sleep(60)` |
+
+### Specific Things to Check
+
+1. **Tool description** - Does it list available environments?
+2. **Error on unknown env** - Is the error message helpful? Does it suggest valid options?
+3. **stdout vs stderr** - Is the `--- stderr ---` separator clear or confusing?
+4. **Exit codes** - Does `is_error` in response match actual failure?
+5. **Empty code** - What happens with `{"environment": "python", "code": ""}`?
+
+### Recording Results
+
+```bash
+# Create notes file
 cat >> thoughts/shared/ux-evaluation-notes.md << 'EOF'
-## Session: [DATE]
+## Session: $(date +%Y-%m-%d)
 
-### What worked well
+### Tool Discovery
+- tools/list response: [describe]
+- Schema clarity: [1-5]
+
+### Execution
+- Python works: [yes/no]
+- Shell works: [yes/no]
+- Node works: [yes/no]
+
+### Error Handling
+- Unknown env message: [copy error]
+- Syntax error clarity: [1-5]
+- Runtime error clarity: [1-5]
+
+### Output Format
+- stdout only: [clear/confusing]
+- stderr only: [clear/confusing]
+- both: [clear/confusing]
+
+### Security
+- Network blocked: [yes/no]
+- Filesystem isolated: [yes/no]
+
+### UX Issues Found
 - ...
 
-### Pain points
-- ...
-
-### Claude's behavior patterns
-- ...
-
-### UX change ideas
+### Ideas for Improvement
 - ...
 EOF
 ```
 
-## 8. Debugging
+## 6. Debugging
 
-### View server logs
-
-The daemon logs to stderr. To see logs while testing:
+### View Server Logs
 
 ```bash
-# Run server manually with visible logs
-./result/bin/nix-sandbox-mcp --stdio 2>server.log
-
-# In another terminal
-tail -f server.log
+# Run with visible stderr logs
+./result/bin/nix-sandbox-mcp --stdio 2>&1 | tee server-output.log
 ```
 
-### Check MCP messages
-
-For deep debugging, you can log the actual JSON-RPC traffic:
+### Log MCP Traffic
 
 ```bash
-# Wrapper script to log MCP traffic
+# Create debug wrapper
 cat > /tmp/mcp-debug.sh << 'EOF'
 #!/bin/bash
 tee /tmp/mcp-in.log | ./result/bin/nix-sandbox-mcp --stdio 2>/tmp/mcp-err.log | tee /tmp/mcp-out.log
 EOF
 chmod +x /tmp/mcp-debug.sh
+
+# Use with inspector
+npx @modelcontextprotocol/inspector /tmp/mcp-debug.sh
+
+# Then check logs
+cat /tmp/mcp-in.log   # requests
+cat /tmp/mcp-out.log  # responses
+cat /tmp/mcp-err.log  # server stderr
 ```
 
-Then use `/tmp/mcp-debug.sh` as the command in Claude Desktop config.
+### Common Issues
 
-## 9. Quick Reference: MCP Protocol
+| Symptom | Likely cause |
+|---------|--------------|
+| Inspector can't connect | Server not built, or not on Linux |
+| "Unknown environment" | Environment name typo, or preset not in config |
+| Execution hangs | Timeout not enforced, or code waiting on stdin |
+| Empty response | Check server stderr for errors |
 
-The server exposes one tool:
+## 7. Quick Reference
 
+### Available Environments (default config)
+
+| Environment | Interpreter | What's included |
+|-------------|-------------|-----------------|
+| `python` | `python3 -c` | Python 3 + stdlib |
+| `shell` | `bash -s` | coreutils, bash, grep, sed, awk, jq, curl |
+| `node` | `node -e` | Node.js 22 |
+
+### MCP Protocol Basics
+
+**Initialize** (required first):
 ```json
-{
-  "name": "execute",
-  "description": "Execute code in a sandboxed Nix environment",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "environment": {
-        "type": "string",
-        "description": "The sandbox environment to use (e.g., 'python', 'shell', 'node')"
-      },
-      "code": {
-        "type": "string",
-        "description": "The code to execute in the sandbox"
-      }
-    },
-    "required": ["environment", "code"]
-  }
-}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 ```
 
-Server info includes instructions listing available environments.
+**List tools:**
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+```
+
+**Call execute tool:**
+```json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"print('hello')"}}}
+```
+
+### Response Format
+
+Success:
+```json
+{"result":{"content":[{"type":"text","text":"hello\n"}],"isError":false}}
+```
+
+Error (non-zero exit):
+```json
+{"result":{"content":[{"type":"text","text":"Traceback...\nValueError: ..."}],"isError":true}}
+```
+
+Combined stdout+stderr:
+```json
+{"result":{"content":[{"type":"text","text":"output\n--- stderr ---\nwarning"}]}}
+```
+
+## 8. Testing Checklist
+
+```
+[ ] Server builds: nix build .#default
+[ ] test-local.sh passes
+[ ] Inspector connects: npx @modelcontextprotocol/inspector ./result/bin/nix-sandbox-mcp --stdio
+[ ] tools/list shows execute with schema
+[ ] Python execution works
+[ ] Shell execution works
+[ ] Node execution works
+[ ] Unknown environment gives helpful error
+[ ] Syntax errors are clear
+[ ] Runtime errors are clear
+[ ] Network is blocked
+[ ] Filesystem is isolated
+[ ] stderr is captured
+[ ] Exit codes set isError correctly
+```
