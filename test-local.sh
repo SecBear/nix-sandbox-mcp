@@ -30,7 +30,7 @@ echo "Test 2: Run Python code"
 response=$( (cat <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"print(1 + 1)","environment":"python"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"code":"print(1 + 1)","env":"python"}}}
 EOF
 sleep 0.5) | ./result/bin/nix-sandbox-mcp --stdio 2>/dev/null)
 if echo "$response" | grep -q '2'; then
@@ -46,7 +46,7 @@ echo "Test 3: Run shell code"
 response=$( (cat <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"echo hello world","environment":"shell"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"code":"echo hello world","env":"shell"}}}
 EOF
 sleep 0.5) | ./result/bin/nix-sandbox-mcp --stdio 2>/dev/null)
 if echo "$response" | grep -q 'hello world'; then
@@ -65,7 +65,7 @@ echo "Test 4: Network access should be blocked"
 response=$( (cat <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"import socket; s = socket.socket(); s.connect(('1.1.1.1', 80)); print('NETWORK_ALLOWED')","environment":"python"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"code":"import socket; s = socket.socket(); s.connect(('1.1.1.1', 80)); print('NETWORK_ALLOWED')","env":"python"}}}
 EOF
 sleep 0.5) | ./result/bin/nix-sandbox-mcp --stdio 2>/dev/null)
 # Check that the response contains a network error, not "NETWORK_ALLOWED" as successful output
@@ -88,7 +88,7 @@ echo "Test 5: Cannot read real host /etc/passwd"
 response=$( (cat <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"print(len(open('/etc/passwd').readlines()))","environment":"python"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"code":"print(len(open('/etc/passwd').readlines()))","env":"python"}}}
 EOF
 sleep 0.5) | ./result/bin/nix-sandbox-mcp --stdio 2>/dev/null)
 # Real passwd has many users (20+), synthetic jail passwd has only 2 (root + current user)
@@ -107,7 +107,7 @@ echo "Test 6: stderr is captured"
 response=$( (cat <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"import sys; sys.stderr.write('error output')","environment":"python"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"code":"import sys; sys.stderr.write('error output')","env":"python"}}}
 EOF
 sleep 0.5) | ./result/bin/nix-sandbox-mcp --stdio 2>/dev/null)
 if echo "$response" | grep -q 'error output'; then
@@ -123,7 +123,7 @@ echo "Test 7: Exception returns error"
 response=$( (cat <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"raise ValueError('test error')","environment":"python"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"code":"raise ValueError('test error')","env":"python"}}}
 EOF
 sleep 0.5) | ./result/bin/nix-sandbox-mcp --stdio 2>/dev/null)
 if echo "$response" | grep -qi 'error\|ValueError'; then
@@ -139,7 +139,7 @@ echo "Test 8: Empty command executes"
 response=$( (cat <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"","environment":"python"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"code":"","env":"python"}}}
 EOF
 sleep 0.5) | ./result/bin/nix-sandbox-mcp --stdio 2>/dev/null)
 if echo "$response" | grep -q '"isError":true'; then

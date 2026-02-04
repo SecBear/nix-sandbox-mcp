@@ -28,14 +28,14 @@ pub struct SandboxServer<B: Clone> {
 /// Parameters for the run tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunParams {
-    /// The command to run in the sandbox.
-    #[schemars(description = "The command to run in the sandbox")]
-    pub command: String,
+    /// The code to run in the sandbox.
+    #[schemars(description = "The code to run in the sandbox")]
+    pub code: String,
 
     /// The execution environment to use (e.g., "python", "shell", "node").
-    /// Required - choose based on what tools the command needs.
+    /// Required - choose based on what tools the code needs.
     #[schemars(description = "Execution environment (required): python, node, shell, or custom")]
-    pub environment: String,
+    pub env: String,
 }
 
 #[tool_router]
@@ -49,17 +49,17 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> SandboxServer<B> {
         }
     }
 
-    /// Run a command in the specified sandbox environment.
-    #[tool(description = "Run a command in an isolated Nix sandbox")]
+    /// Run code in the specified sandbox environment.
+    #[tool(description = "Run code in an isolated Nix sandbox")]
     async fn run(
         &self,
         Parameters(params): Parameters<RunParams>,
     ) -> Result<CallToolResult, McpError> {
-        let env_name = &params.environment;
-        let command = &params.command;
+        let env_name = &params.env;
+        let code = &params.code;
 
         // Look up environment
-        let env = self.config.environments.get(env_name).ok_or_else(|| {
+        let env_meta = self.config.environments.get(env_name).ok_or_else(|| {
             let available: Vec<_> = self.config.environments.keys().collect();
             McpError::invalid_params(
                 format!("Unknown environment: '{env_name}'. Available: {available:?}"),
@@ -67,10 +67,10 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> SandboxServer<B> {
             )
         })?;
 
-        info!(environment = %env_name, command_len = command.len(), "Running command");
+        info!(env = %env_name, code_len = code.len(), "Running code");
 
         // Execute in sandbox
-        match self.backend.execute(env, command).await {
+        match self.backend.execute(env_meta, code).await {
             Ok(result) => {
                 let is_error = result.exit_code != 0;
 
@@ -119,10 +119,10 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> ServerHandler for Sand
              {env_list}\n\
              \n\
              Use the 'run' tool with:\n\
-             - command: the command to run\n\
-             - environment: one of the available environments (required)\n\
+             - code: the code to run\n\
+             - env: one of the available environments (required)\n\
              \n\
-             Choose the environment based on what tools your command needs."
+             Choose the environment based on what tools your code needs."
         );
 
         // Add project info if configured
@@ -190,11 +190,11 @@ mod tests {
         async fn execute(
             &self,
             _env: &EnvironmentMeta,
-            command: &str,
+            code: &str,
         ) -> anyhow::Result<ExecutionResult> {
             Ok(ExecutionResult {
                 exit_code: 0,
-                stdout: format!("executed: {command}"),
+                stdout: format!("executed: {code}"),
                 stderr: String::new(),
             })
         }
@@ -221,8 +221,8 @@ mod tests {
     async fn test_run_success() {
         let server = SandboxServer::new(test_config(), MockBackend);
         let params = Parameters(RunParams {
-            command: "echo hello".to_string(),
-            environment: "test".to_string(),
+            code: "echo hello".to_string(),
+            env: "test".to_string(),
         });
 
         let result = server.run(params).await.unwrap();
@@ -233,8 +233,8 @@ mod tests {
     async fn test_run_unknown_env() {
         let server = SandboxServer::new(test_config(), MockBackend);
         let params = Parameters(RunParams {
-            command: "echo hello".to_string(),
-            environment: "unknown".to_string(),
+            code: "echo hello".to_string(),
+            env: "unknown".to_string(),
         });
 
         let result = server.run(params).await;

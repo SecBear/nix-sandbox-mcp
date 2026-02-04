@@ -14,14 +14,14 @@ Phase 2b adds session persistence to nix-sandbox-mcp, enabling multi-turn workfl
 
 **Without sessions:**
 ```json
-run(command: "x = [1,2,3,4,5]")         // x created
-run(command: "print(sum(x))")           // Error: x not defined
+run(code: "x = [1,2,3,4,5]", env: "python")         // x created
+run(code: "print(sum(x))", env: "python")           // Error: x not defined
 ```
 
 **With sessions:**
 ```json
-run(command: "x = [1,2,3,4,5]", session: "analysis")
-run(command: "print(sum(x))", session: "analysis")  // Returns: 15
+run(code: "x = [1,2,3,4,5]", env: "python", session: "analysis")
+run(code: "print(sum(x))", env: "python", session: "analysis")  // Returns: 15
 ```
 
 Use cases:
@@ -230,7 +230,7 @@ Based on research, add these criteria:
 
 - [ ] Session idle timeout triggers standby (process paused, socket preserved)
 - [ ] Session resume from standby < 100ms
-- [ ] Multi-interpreter support (Python + shell in same session)
+- [ ] Multi-interpreter support (Python + bash in same session)
 - [ ] Shell state persists (use persistent bash, not subprocess)
 - [ ] Error messages indicate session state preservation
 
@@ -240,7 +240,7 @@ Based on research, add these criteria:
 
 ### Goal
 
-Validate that a control-socket approach works reliably for Python, shell, and Node.
+Validate that a control-socket approach works reliably for Python, bash, and Node.
 
 ### Design
 
@@ -330,8 +330,8 @@ def execute_python(code: str) -> tuple[str, str, int]:
     except Exception as e:
         return stdout_capture.getvalue(), f"{type(e).__name__}: {e}\n", 1
 
-def execute_shell(code: str) -> tuple[str, str, int]:
-    """Execute shell code."""
+def execute_bash(code: str) -> tuple[str, str, int]:
+    """Execute bash code."""
     result = subprocess.run(
         ["bash", "-c", code],
         capture_output=True,
@@ -352,7 +352,7 @@ def execute_node(code: str) -> tuple[str, str, int]:
 
 INTERPRETERS = {
     "python": execute_python,
-    "shell": execute_shell,
+    "bash": execute_bash,
     "node": execute_node,
 }
 
@@ -360,7 +360,7 @@ def handle_request(data: bytes) -> bytes:
     """Process a single request."""
     try:
         req = json.loads(data.decode())
-        interpreter = req.get("interpreter", "shell")
+        interpreter = req.get("interpreter", "bash")
         code = req["code"]
 
         if interpreter not in INTERPRETERS:
@@ -427,7 +427,7 @@ if __name__ == "__main__":
    - Start jailed agent
    - Connect from outside jail
    - Send Python code, verify persistent state
-   - Send shell code
+   - Send bash code
    - Verify isolation (can't escape jail)
 4. **Measure:**
    - Latency per request
@@ -454,14 +454,20 @@ if __name__ == "__main__":
   "name": "run",
   "inputSchema": {
     "properties": {
-      "command": { "type": "string" },
-      "environment": { "type": "string" },
+      "code": {
+        "type": "string",
+        "description": "Code to execute (raw code, not interpreter invocations)"
+      },
+      "env": {
+        "type": "string",
+        "description": "Execution environment: python, node, bash, or custom"
+      },
       "session": {
         "type": "string",
         "description": "Session ID for persistent state. Omit for ephemeral."
       }
     },
-    "required": ["command"]
+    "required": ["code", "env"]
   }
 }
 ```

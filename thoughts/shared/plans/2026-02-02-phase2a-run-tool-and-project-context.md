@@ -66,7 +66,7 @@ Command::new(interpreter).arg("-c").arg(code)  // No shell metacharacters
 {
   "content": [{
     "type": "text",
-    "text": "Unknown environment 'rust'. Available: python, node, shell, project. Use environment='project' to access your project's devShell."
+    "text": "Unknown environment 'rust'. Available: python, node, bash, project. Use env='project' to access your project's devShell."
   }],
   "isError": true
 }
@@ -90,11 +90,11 @@ After analysis, we chose explicit environment selection over auto-detection:
 ```
 User: "Calculate first 100 primes"
 Claude thinks: "I need Python for computation"
-Claude calls: run(command="...", environment="python")
+Claude calls: run(code="...", env="python")
 
 User: "Run our tests"
-Claude thinks: "pytest is a shell command"
-Claude calls: run(command="pytest tests/", environment="shell")
+Claude thinks: "pytest runs in bash"
+Claude calls: run(code="pytest tests/", env="bash")
 ```
 
 This matches Claude Code's existing pattern of choosing between Bash/Read/Write tools.
@@ -186,15 +186,27 @@ execute(environment: string, code: string)
 ## Desired End State (Phase 2a)
 
 ```
-run(command: string, environment?: string)
+run(code: string, env: string)
 ```
 
 **Basic usage:**
 ```json
-{"command": "print(1+1)"}           // Auto-detects python
-{"command": "pytest tests/ -v"}     // Runs project tests
-{"command": "cargo build"}          // Uses project's Rust toolchain (if use_flake)
+{"code": "print(1+1)", "env": "python"}
+{"code": "pytest tests/ -v", "env": "bash"}
+{"code": "cargo build", "env": "bash"}
 ```
+
+**Interface Design Rationale (2026-02-03):**
+
+After experimentation, we chose `code` + `env` over alternatives:
+
+- `command` → `code`: The word "command" primed LLMs to think "shell command", causing double-wrapping like `python -c "print('hi')"` when raw code was expected. `code` clearly signals "this is code to execute."
+
+- `shell` → `bash`: More specific. LLMs know `bash` is an interpreter. `shell` is ambiguous.
+
+- Kept `env` over `interpreter`: While `interpreter` works for simple cases (`interpreter="python"`), it's awkward for custom environments (`interpreter="rust-dev"`, `interpreter="project"`). `env` is general and scales to any configured environment.
+
+The environment VALUES (`python`, `bash`, `node`) do the heavy lifting - they're intuitive interpreter names that guide the LLM on what code to send.
 
 **Project config:**
 ```toml
@@ -232,20 +244,20 @@ vars = ["DATABASE_URL", "RUST_LOG"]
 ```json
 {
   "name": "run",
-  "description": "Run a command in an isolated Nix sandbox.\n\nAvailable environments:\n- python: Python 3 with standard library\n- node: Node.js runtime\n- shell: Bash with coreutils, curl, jq\n\nChoose the environment that has the tools needed for your command.",
+  "description": "Execute code in an isolated Nix sandbox.\n\nAvailable environments:\n- python: Python 3 with standard library\n- node: Node.js runtime\n- bash: Bash with coreutils, curl, jq\n\nPass raw code (not shell commands to invoke interpreters).\n\nExamples:\n- Python: {\"code\": \"print('hi')\", \"env\": \"python\"} ✓\n- Wrong: {\"code\": \"python -c 'print(hi)'\", \"env\": \"python\"} ✗\n- Bash: {\"code\": \"ls -la\", \"env\": \"bash\"} ✓",
   "inputSchema": {
     "type": "object",
     "properties": {
-      "command": {
+      "code": {
         "type": "string",
-        "description": "The command to run"
+        "description": "Code to execute (raw code, not shell invocations)"
       },
-      "environment": {
+      "env": {
         "type": "string",
-        "description": "Execution environment (required): python, node, shell, or custom"
+        "description": "Execution environment: python, node, bash, or custom"
       }
     },
-    "required": ["command", "environment"]
+    "required": ["code", "env"]
   }
 }
 ```
@@ -257,20 +269,20 @@ vars = ["DATABASE_URL", "RUST_LOG"]
 ```rust
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunParams {
-    /// The command to run
-    pub command: String,
-    /// Execution environment (required)
-    pub environment: String,
+    /// Code to execute (raw code, not shell invocations)
+    pub code: String,
+    /// Execution environment: python, node, bash, or custom
+    pub env: String,
 }
 
-#[tool(description = "Run a command in an isolated Nix sandbox")]
+#[tool(description = "Execute code in an isolated Nix sandbox")]
 async fn run(
     &self,
     Parameters(params): Parameters<RunParams>,
 ) -> Result<CallToolResult, McpError> {
-    let env_name = &params.environment;
+    let env_name = &params.env;
 
-    let env = self.config.environments.get(env_name).ok_or_else(|| {
+    let env_meta = self.config.environments.get(env_name).ok_or_else(|| {
         let available: Vec<_> = self.config.environments.keys().collect();
         McpError::invalid_params(
             format!("Unknown environment: '{env_name}'. Available: {available:?}"),
@@ -290,9 +302,9 @@ The `execute` tool is removed. This is intentional—Phase 1 just shipped, no ex
 
 #### Success Criteria
 
-- [x] `run(command: "print(1)", environment: "python")` returns "1"
-- [x] `run(command: "echo hi", environment: "shell")` returns "hi"
-- [x] `run(command: "console.log(1)", environment: "node")` returns "1"
+- [x] `run(code: "print(1)", env: "python")` returns "1"
+- [x] `run(code: "echo hi", env: "bash")` returns "hi"
+- [x] `run(code: "console.log(1)", env: "node")` returns "1"
 - [x] Unknown environment returns helpful error with available options
 - [x] Tool description dynamically lists available environments
 
@@ -305,8 +317,8 @@ The `execute` tool is removed. This is intentional—Phase 1 just shipped, no ex
 ```toml
 [project]
 path = "."              # Default: CWD
-mode = "readonly"       # "readonly" | "readwrite"
 mount_point = "/project"
+# Note: Always read-only for security
 ```
 
 #### Changes
@@ -396,9 +408,8 @@ buildEnv = name: envConfig:
 #### Success Criteria
 
 - [x] `/project` exists in sandbox when `[project]` configured
-- [x] Can read files: `run(command: "cat /project/README.md")`
-- [x] Cannot write in readonly mode
-- [ ] Can write in readwrite mode (not tested, infrastructure ready)
+- [x] Can read files: `run(code: "cat /project/README.md", env: "bash")`
+- [x] Cannot write (always read-only)
 - [x] Not mounted when `[project]` absent
 
 ---
@@ -462,10 +473,10 @@ buildEnv = name: envConfig:
 
 #### Success Criteria
 
-- [ ] `flake = "github:..."` resolves and builds
-- [ ] `flake = "/local/path#attr"` works
-- [ ] Custom `interpreter` respected
-- [ ] Error message helpful when flake not found
+- [x] `flake = "github:..."` resolves and builds
+- [x] `flake = "/local/path#attr"` works
+- [x] Custom `interpreter` respected
+- [x] Error message helpful when flake not found
 
 ---
 
@@ -566,11 +577,11 @@ mkJailedEnv = {
 
 #### Success Criteria
 
-- [ ] `use_flake = true` creates "project" environment
-- [ ] Project's devShell packages available
-- [ ] `inherit_env` vars passed into sandbox
-- [ ] Auto-detection can select "project" env for commands like `cargo`, `make`
-- [ ] Works with typical Rust/Python/Node project flakes
+- [x] `use_flake = true` creates "project" environment
+- [x] Project's devShell packages available
+- [x] `inherit_env` vars passed into sandbox
+- [x] Auto-detection can select "project" env for commands like `cargo`, `make`
+- [x] Works with typical Rust/Python/Node project flakes
 
 ---
 
@@ -585,21 +596,22 @@ fn get_info(&self) -> ServerInfo {
     let envs: Vec<_> = self.config.environments.keys().collect();
 
     let mut desc = format!(
-        "Run commands in isolated Nix sandboxes.\n\
+        "Execute code in isolated Nix sandboxes.\n\
+         \n\
          Available environments: {envs:?}\n\
          \n\
-         Environment is auto-detected from command, or specify explicitly."
+         Use 'run' tool with:\n\
+         - code: raw code to execute\n\
+         - env: one of the available environments\n\
+         \n\
+         Pass raw code, NOT shell commands (e.g., code=\"print('hi')\" not code=\"python -c 'print(hi)'\")"
     );
 
     // Add project info if configured
     if let Some(project) = &self.config.project {
         desc.push_str(&format!(
-            "\n\nProject directory mounted at {} ({}).",
+            "\n\nProject directory mounted at {} (read-only).",
             project.mount_point,
-            match project.mode {
-                MountMode::Readonly => "read-only",
-                MountMode::Readwrite => "read-write",
-            }
         ));
 
         if project.use_flake {
@@ -618,7 +630,7 @@ fn get_info(&self) -> ServerInfo {
 
 - [x] Tool description lists available environments
 - [x] Mentions `/project` mount when configured
-- [ ] Mentions "project" environment when `use_flake = true` (Phase 2a.4 required)
+- [x] Mentions "project" environment when `use_flake = true` (Phase 2a.4 required)
 
 ---
 
@@ -647,7 +659,7 @@ pub async fn execute(&self, env: &EnvironmentMeta, code: &str) -> Result<Executi
 
 #### Success Criteria
 
-- [x] `run(command: "sleep 999")` times out with clear message
+- [x] `run(code: "sleep 999", env: "bash")` times out with clear message
 - [x] Timeout configurable per-environment in TOML
 
 ---
@@ -661,20 +673,20 @@ pub async fn execute(&self, env: &EnvironmentMeta, code: &str) -> Result<Executi
 
 echo "=== Phase 2a: run tool ==="
 
-# Auto-detection
-echo "Test: Auto-detect Python"
+# Python execution
+echo "Test: Python code execution"
 response=$(./result/bin/nix-sandbox-mcp --stdio <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"print(1+1)"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"code":"print(1+1)","env":"python"}}}
 EOF
 )
-assert_contains "$response" "2" "Auto-detect Python"
+assert_contains "$response" "2" "Python execution"
 
 # Project mounting
 echo "Test: Project mounted"
 response=$(./result/bin/nix-sandbox-mcp --stdio <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"ls /project"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"code":"ls /project","env":"bash"}}}
 EOF
 )
 assert_contains "$response" "README" "Project mounted"
@@ -683,7 +695,7 @@ assert_contains "$response" "README" "Project mounted"
 echo "Test: Timeout enforcement"
 response=$(./result/bin/nix-sandbox-mcp --stdio <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"sleep 999"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"code":"sleep 999","env":"bash"}}}
 EOF
 )
 assert_contains "$response" "timeout" "Timeout works"
@@ -692,14 +704,14 @@ assert_contains "$response" "timeout" "Timeout works"
 ### Manual Testing
 
 ```
-[ ] Basic run() works with auto-detection
-[ ] Override environment works
+[ ] Basic run() works with code + env params
 [ ] Project files visible at /project
-[ ] Cannot write in readonly mode
+[ ] Cannot write to /project (read-only)
 [ ] Custom flake environment works
 [ ] Project flake devShell works
 [ ] Timeout kills long commands
 [ ] Works end-to-end with Claude Code
+[ ] LLM sends raw code (not shell invocations like "python -c ...")
 ```
 
 ---
@@ -725,26 +737,32 @@ Note: No `detect.rs` needed - environment selection is Claude's responsibility v
 **Tool change:** `execute` → `run`
 
 ```json
-// Before
+// Before (Phase 1)
 {"name": "execute", "arguments": {"environment": "python", "code": "print(1)"}}
 
-// After
-{"name": "run", "arguments": {"command": "print(1)"}}
+// After (Phase 2a)
+{"name": "run", "arguments": {"code": "print(1)", "env": "python"}}
 ```
+
+**Parameter changes:**
+- `command` → `code` (clearer that it's code to execute, not a shell command)
+- `environment` → `env` (shorter, same meaning)
+- `shell` → `bash` (more specific interpreter name)
 
 **Config additions:**
 ```toml
 [project]
 path = "."
-mode = "readonly"
 use_flake = true
 
 [project.inherit_env]
 vars = ["DATABASE_URL"]
 
+[environments.bash]
+preset = "shell"  # renamed from [environments.shell]
+
 [environments.custom]
 flake = "github:owner/repo#attr"
-interpreter = "bash -s"
 ```
 
 ---
