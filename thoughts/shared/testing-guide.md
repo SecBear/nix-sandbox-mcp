@@ -35,7 +35,7 @@ Before using the inspector, verify the server works:
 EOF
 ```
 
-Expected: You should see the `execute` tool with its schema.
+Expected: You should see the `run` tool with its schema (requires `command` and `environment` parameters).
 
 ## 3. Testing with MCP Inspector
 
@@ -61,19 +61,19 @@ Once connected, the Inspector provides:
 
 | Tab | What it shows |
 |-----|---------------|
-| **Tools** | Lists available tools (`execute`), shows schema, lets you test with custom inputs |
+| **Tools** | Lists available tools (`run`), shows schema, lets you test with custom inputs |
 | **Resources** | Lists resources (none for this server) |
 | **Prompts** | Lists prompt templates (none for this server) |
 | **Notifications** | Server logs and notifications |
 
-### 3.3 Testing the execute Tool
+### 3.3 Testing the run Tool
 
 In the **Tools** tab:
 
-1. Click on `execute` tool
+1. Click on `run` tool
 2. Fill in the form:
+   - `command`: `print("hello from sandbox")`
    - `environment`: `python` (or `shell`, `node`)
-   - `code`: `print("hello from sandbox")`
 3. Click "Run Tool"
 4. Observe the response
 
@@ -83,47 +83,52 @@ Run these through the Inspector's Tools tab:
 
 **Basic execution:**
 ```json
-{"environment": "python", "code": "print(sum(range(10)))"}
+{"command": "print(sum(range(10)))", "environment": "python"}
 ```
 
 **Shell command:**
 ```json
-{"environment": "shell", "code": "echo $HOME && pwd && whoami"}
+{"command": "echo $HOME && pwd && whoami", "environment": "shell"}
 ```
 
 **Node.js:**
 ```json
-{"environment": "node", "code": "console.log(Array.from({length:5}, (_,i) => i*i))"}
+{"command": "console.log(Array.from({length:5}, (_,i) => i*i))", "environment": "node"}
+```
+
+**Project files (if [project] configured):**
+```json
+{"command": "ls /project", "environment": "shell"}
 ```
 
 **Error handling - syntax error:**
 ```json
-{"environment": "python", "code": "print('unterminated"}
+{"command": "print('unterminated", "environment": "python"}
 ```
 
 **Error handling - runtime exception:**
 ```json
-{"environment": "python", "code": "raise ValueError('test error')"}
+{"command": "raise ValueError('test error')", "environment": "python"}
 ```
 
 **Security - network blocked:**
 ```json
-{"environment": "python", "code": "import socket; s = socket.socket(); s.connect(('1.1.1.1', 80))"}
+{"command": "import socket; s = socket.socket(); s.connect(('1.1.1.1', 80))", "environment": "python"}
 ```
 
 **Security - filesystem isolated:**
 ```json
-{"environment": "python", "code": "print(open('/etc/passwd').read())"}
+{"command": "print(open('/etc/passwd').read())", "environment": "python"}
 ```
 
 **Edge case - stderr capture:**
 ```json
-{"environment": "python", "code": "import sys; print('stdout'); sys.stderr.write('stderr')"}
+{"command": "import sys; print('stdout'); sys.stderr.write('stderr')", "environment": "python"}
 ```
 
 **Edge case - unknown environment:**
 ```json
-{"environment": "rust", "code": "fn main() {}"}
+{"command": "fn main() {}", "environment": "rust"}
 ```
 
 ## 4. Raw CLI Testing (No Inspector)
@@ -144,8 +149,8 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 # List tools
 echo '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | $SERVER
 
-# Execute Python
-echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"print(2**100)"}}}' | $SERVER
+# Run Python
+echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run","arguments":{"command":"print(2**100)","environment":"python"}}}' | $SERVER
 ```
 
 ### 4.2 One-liner Tests
@@ -153,11 +158,15 @@ echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute","
 ```bash
 # Python calculation
 ./result/bin/nix-sandbox-mcp --stdio <<< '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"import math; print(math.factorial(20))"}}}'
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"import math; print(math.factorial(20))","environment":"python"}}}'
 
 # Shell - check working directory
 ./result/bin/nix-sandbox-mcp --stdio <<< '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"shell","code":"pwd && ls -la"}}}'
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"pwd && ls -la","environment":"shell"}}}'
+
+# List project files (if [project] configured)
+./result/bin/nix-sandbox-mcp --stdio <<< '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"ls -la /project","environment":"shell"}}}'
 ```
 
 ### 4.3 Pretty-print Output
@@ -167,7 +176,7 @@ Pipe through `jq` for readable output:
 ```bash
 ./result/bin/nix-sandbox-mcp --stdio <<'EOF' 2>/dev/null | jq -s '.[-1]'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"for i in range(5): print(f'Line {i}')"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"command":"for i in range(5): print(f'Line {i}')","environment":"python"}}}
 EOF
 ```
 
@@ -288,9 +297,9 @@ cat /tmp/mcp-err.log  # server stderr
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
 ```
 
-**Call execute tool:**
+**Call run tool:**
 ```json
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute","arguments":{"environment":"python","code":"print('hello')"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run","arguments":{"command":"print('hello')","environment":"python"}}}
 ```
 
 ### Response Format
@@ -316,15 +325,17 @@ Combined stdout+stderr:
 [ ] Server builds: nix build .#default
 [ ] test-local.sh passes
 [ ] Inspector connects: npx @modelcontextprotocol/inspector ./result/bin/nix-sandbox-mcp --stdio
-[ ] tools/list shows execute with schema
+[ ] tools/list shows `run` tool with command + environment params
 [ ] Python execution works
 [ ] Shell execution works
 [ ] Node execution works
+[ ] Project files accessible at /project (if configured)
 [ ] Unknown environment gives helpful error
 [ ] Syntax errors are clear
 [ ] Runtime errors are clear
 [ ] Network is blocked
-[ ] Filesystem is isolated
+[ ] Filesystem is isolated (/etc/passwd shows only 2-3 entries)
 [ ] stderr is captured
 [ ] Exit codes set isError correctly
+[ ] Timeout works (try sleep 999)
 ```

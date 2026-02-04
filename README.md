@@ -60,6 +60,15 @@ timeout_seconds = 30
 memory_mb = 512
 
 # ─────────────────────────────────────────────────────────────
+# Project (Optional)
+# Mount your project directory into the sandbox (read-only)
+# ─────────────────────────────────────────────────────────────
+
+[project]
+path = "."                # Project directory (default: current directory)
+mount_point = "/project"  # Where to mount inside sandbox
+
+# ─────────────────────────────────────────────────────────────
 # Environments
 # ─────────────────────────────────────────────────────────────
 
@@ -73,30 +82,9 @@ preset = "python"
 [environments.node]
 preset = "node"
 
-# Reference your own flake
-[environments.dev]
-flake = "github:myorg/dev-envs#default"
-
-# Local flake
-[environments.project]
-flake = "/home/user/myproject#sandbox"
-
-# Override backend for untrusted code
-[environments.untrusted]
-flake = "github:someone/env#thing"
-backend = "microvm"
-memory_mb = 1024
-
-# ─────────────────────────────────────────────────────────────
-# Backend Configuration
-# ─────────────────────────────────────────────────────────────
-
-[backends.jail]
-# Flake exporting jail.nix combinators (optional)
-# combinators = "github:myorg/sandbox-config#jail-combinators"
-
-[backends.microvm]
-hypervisor = "cloud-hypervisor"  # "cloud-hypervisor" | "qemu" | "firecracker"
+# Reference your own flake (Phase 2a.3 - coming soon)
+# [environments.dev]
+# flake = "github:myorg/dev-envs#default"
 ```
 
 Use with your config:
@@ -234,34 +222,30 @@ nix-sandbox-mcp/
 
 ## Implementation Roadmap
 
-### Phase 1: Core (jail.nix backend)
-- [ ] Nix flake structure with preset environments
-- [ ] jail.nix integration for sandboxing
-- [ ] TOML config parsing in Nix
-- [ ] Minimal Rust daemon with MCP protocol
-- [ ] JailBackend implementation (fork + exec)
-- [ ] `tools/list` and `tools/call` handlers
-- [ ] Works with Claude Desktop
+### Phase 1: Core (jail.nix backend) ✅
+- [x] Nix flake structure with preset environments
+- [x] jail.nix integration for sandboxing
+- [x] TOML config parsing in Nix
+- [x] Minimal Rust daemon with MCP protocol
+- [x] JailBackend implementation (fork + exec)
+- [x] `tools/list` and `tools/call` handlers
+- [x] Works with Claude Desktop
 
-### Phase 2: Polish
-- [ ] Custom flake references in config
-- [ ] Backend-specific config options in TOML
-- [ ] Better error messages and logging
-- [ ] Timeout enforcement
-- [ ] Resource limits (memory, CPU via cgroups)
+### Phase 2a: Project Context ✅
+- [x] `run` tool with `command` + `environment` parameters
+- [x] Project directory mounting (read-only at `/project`)
+- [x] Dynamic tool description showing available environments
+- [x] Timeout enforcement with clear error messages
+- [ ] Custom flake references in config (coming soon)
 
-### Phase 3: MicroVM Backend
+### Phase 2b: Sessions (Planned)
+- [ ] Session persistence via IPC
+- [ ] Stateful sandbox interactions
+
+### Phase 3: MicroVM Backend (Planned)
 - [ ] microvm.nix integration
-- [ ] Guest agent (Rust binary in VM)
-- [ ] vsock communication
+- [ ] Hardware-level isolation for untrusted code
 - [ ] virtiofs for /nix/store sharing
-- [ ] `backend = "microvm"` in config
-
-### Phase 4: Advanced
-- [ ] Pre-warmed sandbox pools
-- [ ] Inline package lists in TOML (`packages = ["python3", "ripgrep"]`)
-- [ ] Snapshot/restore for fast microVM startup
-- [ ] Metrics and observability
 
 ## Environment Flake Contract
 
