@@ -13,6 +13,25 @@ let
   # Use jail backend for MVP
   jailBackend = backends.jail;
 
+  # Get the directory containing the config file (for resolving relative paths)
+  configDir = builtins.dirOf configPath;
+
+  # Resolve project path if configured
+  # For "." or relative paths, resolve relative to config directory
+  # Note: builtins.path copies the path to the store - this makes builds reproducible
+  # and ensures the project is always mounted readonly (Nix store is immutable)
+  projectPath = if config ? project then
+    let
+      rawPath = config.project.path or ".";
+      # Resolve relative to config directory
+      resolvedPath = if rawPath == "." then configDir
+                     else if builtins.substring 0 1 rawPath == "/" then rawPath
+                     else configDir + "/" + rawPath;
+    in builtins.toString (builtins.path { path = resolvedPath; name = "project"; })
+  else null;
+
+  projectMount = if config ? project then config.project.mount_point or "/project" else "/project";
+
   # Build a single environment from config
   buildEnv = name: envConfig:
     let
@@ -21,8 +40,8 @@ let
         if envConfig ? preset then
           presets.${envConfig.preset} or (throw "Unknown preset: ${envConfig.preset}")
         else if envConfig ? flake then
-          # Phase 2: Custom flake support
-          throw "Custom flake inputs not yet supported (Phase 2)"
+          # Phase 2a.3: Custom flake support
+          throw "Custom flake inputs not yet supported (Phase 2a.3)"
         else
           throw "Environment '${name}' must specify 'preset' or 'flake'";
 
@@ -37,9 +56,9 @@ let
         else
           throw "Custom interpreter config not yet supported";
 
-      # Build the jailed environment
+      # Build the jailed environment with project mounting (always readonly)
       jailedEnv = interpreterInfo.fn {
-        inherit name;
+        inherit name projectPath projectMount;
         env = baseEnv;
       };
 
@@ -62,13 +81,30 @@ let
   # Collect all derivations (for runtimeInputs)
   drvs = builtins.attrValues (builtins.mapAttrs (_: e: e.drv) environments);
 
-  # Generate metadata JSON (for NIX_SANDBOX_METADATA)
-  metadata = builtins.mapAttrs (_: e: e.meta) environments;
-  metadataJson = builtins.toJSON metadata;
+  # Generate environment metadata (exec paths, timeouts, etc.)
+  envMetadata = builtins.mapAttrs (_: e: e.meta) environments;
+
+  # Build project config for daemon (if configured)
+  # Note: Project is always mounted readonly for security and reproducibility
+  projectConfig = if config ? project then {
+    path = config.project.path or ".";
+    mount_point = config.project.mount_point or "/project";
+    use_flake = config.project.use_flake or false;
+    inherit_env = config.project.inherit_env or { vars = []; };
+  } else null;
+
+  # Full metadata structure expected by daemon
+  # Shape: { environments: {...}, project?: {...} }
+  fullMetadata = {
+    environments = envMetadata;
+  } // (if projectConfig != null then { project = projectConfig; } else {});
+
+  metadataJson = builtins.toJSON fullMetadata;
 
 in {
   inherit drvs metadataJson environments;
 
   # For debugging
-  inherit config metadata;
+  inherit config;
+  metadata = fullMetadata;
 }

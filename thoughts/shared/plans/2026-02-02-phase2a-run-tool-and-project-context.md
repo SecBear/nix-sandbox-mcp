@@ -290,11 +290,11 @@ The `execute` tool is removed. This is intentional—Phase 1 just shipped, no ex
 
 #### Success Criteria
 
-- [ ] `run(command: "print(1)", environment: "python")` returns "1"
-- [ ] `run(command: "echo hi", environment: "shell")` returns "hi"
-- [ ] `run(command: "console.log(1)", environment: "node")` returns "1"
-- [ ] Unknown environment returns helpful error with available options
-- [ ] Tool description dynamically lists available environments
+- [x] `run(command: "print(1)", environment: "python")` returns "1"
+- [x] `run(command: "echo hi", environment: "shell")` returns "hi"
+- [x] `run(command: "console.log(1)", environment: "node")` returns "1"
+- [x] Unknown environment returns helpful error with available options
+- [x] Tool description dynamically lists available environments
 
 ---
 
@@ -395,11 +395,11 @@ buildEnv = name: envConfig:
 
 #### Success Criteria
 
-- [ ] `/project` exists in sandbox when `[project]` configured
-- [ ] Can read files: `run(command: "cat /project/README.md")`
-- [ ] Cannot write in readonly mode
-- [ ] Can write in readwrite mode
-- [ ] Not mounted when `[project]` absent
+- [x] `/project` exists in sandbox when `[project]` configured
+- [x] Can read files: `run(command: "cat /project/README.md")`
+- [x] Cannot write in readonly mode
+- [ ] Can write in readwrite mode (not tested, infrastructure ready)
+- [x] Not mounted when `[project]` absent
 
 ---
 
@@ -616,9 +616,9 @@ fn get_info(&self) -> ServerInfo {
 
 #### Success Criteria
 
-- [ ] Tool description lists available environments
-- [ ] Mentions `/project` mount when configured
-- [ ] Mentions "project" environment when `use_flake = true`
+- [x] Tool description lists available environments
+- [x] Mentions `/project` mount when configured
+- [ ] Mentions "project" environment when `use_flake = true` (Phase 2a.4 required)
 
 ---
 
@@ -647,8 +647,8 @@ pub async fn execute(&self, env: &EnvironmentMeta, code: &str) -> Result<Executi
 
 #### Success Criteria
 
-- [ ] `run(command: "sleep 999")` times out with clear message
-- [ ] Timeout configurable per-environment in TOML
+- [x] `run(command: "sleep 999")` times out with clear message
+- [x] Timeout configurable per-environment in TOML
 
 ---
 

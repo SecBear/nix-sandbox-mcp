@@ -21,15 +21,13 @@ pub struct Config {
 }
 
 /// Project directory configuration.
+/// Note: Project is always mounted read-only for security and reproducibility.
+/// Use Claude's Edit tool for file modifications.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProjectConfig {
     /// Path to the project directory.
     #[serde(default = "default_project_path")]
     pub path: PathBuf,
-
-    /// Mount mode: "readonly" or "readwrite".
-    #[serde(default)]
-    pub mode: MountMode,
 
     /// Mount point inside the sandbox.
     #[serde(default = "default_mount_point")]
@@ -42,15 +40,6 @@ pub struct ProjectConfig {
     /// Environment variables to inherit from the host.
     #[serde(default)]
     pub inherit_env: InheritEnv,
-}
-
-/// Mount mode for project directory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum MountMode {
-    #[default]
-    Readonly,
-    Readwrite,
 }
 
 /// Environment variables to inherit into the sandbox.
@@ -178,7 +167,6 @@ mod tests {
             },
             "project": {
                 "path": "/home/user/myproject",
-                "mode": "readonly",
                 "mount_point": "/project",
                 "use_flake": true,
                 "inherit_env": {
@@ -191,7 +179,6 @@ mod tests {
 
         let project = config.project.as_ref().expect("project should be set");
         assert_eq!(project.path, PathBuf::from("/home/user/myproject"));
-        assert_eq!(project.mode, MountMode::Readonly);
         assert_eq!(project.mount_point, "/project");
         assert!(project.use_flake);
         assert_eq!(project.inherit_env.vars, vec!["DATABASE_URL", "RUST_LOG"]);

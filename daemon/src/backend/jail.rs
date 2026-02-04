@@ -51,13 +51,11 @@ impl IsolationBackend for JailBackend {
         drop(stdin); // Close stdin to signal EOF
 
         // Wait for completion with timeout
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(env.timeout_seconds),
-            child.wait_with_output(),
-        )
-        .await
-        .context("Execution timed out")?
-        .context("Failed to wait for process")?;
+        let timeout_duration = std::time::Duration::from_secs(env.timeout_seconds);
+        let output = tokio::time::timeout(timeout_duration, child.wait_with_output())
+            .await
+            .map_err(|_| anyhow::anyhow!("Command timed out after {}s", env.timeout_seconds))?
+            .context("Failed to wait for process")?;
 
         let result = ExecutionResult {
             exit_code: output.status.code().unwrap_or(-1),

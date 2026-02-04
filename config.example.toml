@@ -1,5 +1,5 @@
 # nix-sandbox-mcp configuration
-# 
+#
 # This file defines which environments are available and how they're sandboxed.
 
 [daemon]
@@ -10,6 +10,22 @@ log_level = "info"
 backend = "jail"          # "jail" (fast, namespace isolation) or "microvm" (secure, VM isolation)
 timeout_seconds = 30      # Maximum execution time per invocation
 memory_mb = 512           # Memory limit for sandbox
+
+# ─────────────────────────────────────────────────────────────────
+# Project Configuration (Optional)
+#
+# Mount a project directory into all sandbox environments.
+# This allows code to access project files (e.g., run tests, read configs).
+# ─────────────────────────────────────────────────────────────────
+
+[project]
+path = "."              # Project directory (default: current directory)
+mount_point = "/project" # Where to mount inside sandbox (default: /project)
+# Note: Project is always mounted read-only. Use Claude's Edit tool for modifications.
+# use_flake = false     # Create "project" env from project's devShell (Phase 2a.4)
+#
+# [project.inherit_env]
+# vars = ["DATABASE_URL", "RUST_LOG"]  # Host env vars to pass into sandbox
 
 # ─────────────────────────────────────────────────────────────────
 # Environments

@@ -13,11 +13,16 @@ rec {
   #   env: The environment package (from nix/environments/)
   #   interpreter: Command to run code (e.g., "python3 -c")
   #   stdinMode: How to pass code - "arg" (python -c "$(cat)") or "pipe" (bash -s)
+  #   projectPath: Optional path to mount as project directory (null = no project)
+  #   projectMount: Mount point for project inside sandbox (default: /project)
+  # Note: Project is always mounted read-only for security and reproducibility
   mkJailedEnv = {
     name,
     env,
     interpreter,
     stdinMode ? "arg",  # "arg" = pass as argument, "pipe" = pipe to stdin
+    projectPath ? null,
+    projectMount ? "/project",
   }:
     let
       # The runner script that executes inside the jail
@@ -40,25 +45,32 @@ rec {
       # Wrap with jail.nix
       # jail returns a derivation with bin/sandbox-${name} executable
       # Pass the explicit path to the runner script executable
-      jailed = jail "sandbox-${name}" "${runnerScript}/bin/runner-${name}" (c: [
-        # Minimal base: fake /proc, /dev, coreutils, bash
-        c.base
+      jailed = jail "sandbox-${name}" "${runnerScript}/bin/runner-${name}" (c:
+        let
+          # Project mounting combinator (if project path configured)
+          # Always read-only for security and reproducibility
+          projectCombs = if projectPath != null then [
+            (c.ro-bind projectPath projectMount)
+          ] else [];
+        in [
+          # Minimal base: fake /proc, /dev, coreutils, bash
+          c.base
 
-        # Add environment packages to PATH
-        # Note: add-pkg-deps handles PATH, don't override it manually
-        (c.add-pkg-deps [ env ])
+          # Add environment packages to PATH
+          # Note: add-pkg-deps handles PATH, don't override it manually
+          (c.add-pkg-deps [ env ])
 
-        # Writable workspace (created fresh each run, cleaned up on exit)
-        (c.tmpfs "/workspace")
-        (c.set-env "HOME" "/workspace")
-        (c.set-env "TMPDIR" "/workspace")
+          # Writable workspace (created fresh each run, cleaned up on exit)
+          (c.tmpfs "/workspace")
+          (c.set-env "HOME" "/workspace")
+          (c.set-env "TMPDIR" "/workspace")
 
-        # No network access by default (security)
-        # Network would require: c.network
+          # No network access by default (security)
+          # Network would require: c.network
 
-        # Minimal environment variables
-        (c.set-env "TERM" "dumb")
-      ]);
+          # Minimal environment variables
+          (c.set-env "TERM" "dumb")
+        ] ++ projectCombs);
     in
       # Return derivation with /bin/run pointing to the jailed script
       # ${jailed} is a derivation with bin/sandbox-${name} executable
@@ -68,20 +80,21 @@ rec {
       '';
 
   # Convenience wrappers for common interpreters
-  mkPythonEnv = { name, env }: mkJailedEnv {
-    inherit name env;
+  # All accept optional project mounting params: projectPath, projectMount
+  mkPythonEnv = { name, env, projectPath ? null, projectMount ? "/project" }: mkJailedEnv {
+    inherit name env projectPath projectMount;
     interpreter = "python3 -c";
     stdinMode = "arg";
   };
 
-  mkShellEnv = { name, env }: mkJailedEnv {
-    inherit name env;
+  mkShellEnv = { name, env, projectPath ? null, projectMount ? "/project" }: mkJailedEnv {
+    inherit name env projectPath projectMount;
     interpreter = "bash -s";
     stdinMode = "pipe";
   };
 
-  mkNodeEnv = { name, env }: mkJailedEnv {
-    inherit name env;
+  mkNodeEnv = { name, env, projectPath ? null, projectMount ? "/project" }: mkJailedEnv {
+    inherit name env projectPath projectMount;
     interpreter = "node -e";
     stdinMode = "arg";
   };

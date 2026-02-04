@@ -111,6 +111,32 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> ServerHandler for Sand
             .collect::<Vec<_>>()
             .join("\n");
 
+        // Build base description
+        let mut desc = format!(
+            "Run commands in isolated Nix sandbox environments.\n\
+             \n\
+             Available environments:\n\
+             {env_list}\n\
+             \n\
+             Use the 'run' tool with:\n\
+             - command: the command to run\n\
+             - environment: one of the available environments (required)\n\
+             \n\
+             Choose the environment based on what tools your command needs."
+        );
+
+        // Add project info if configured
+        if let Some(project) = &self.config.project {
+            desc.push_str(&format!(
+                "\n\nProject directory mounted at {} (read-only).",
+                project.mount_point
+            ));
+
+            if project.use_flake {
+                desc.push_str("\nProject's devShell available as 'project' environment.");
+            }
+        }
+
         ServerInfo {
             protocol_version: rmcp::model::ProtocolVersion::V_2024_11_05,
             capabilities: ServerCapabilities::builder().enable_tools().build(),
@@ -121,18 +147,7 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> ServerHandler for Sand
                 icons: None,
                 website_url: None,
             },
-            instructions: Some(format!(
-                "Run commands in isolated Nix sandbox environments.\n\
-                 \n\
-                 Available environments:\n\
-                 {env_list}\n\
-                 \n\
-                 Use the 'run' tool with:\n\
-                 - command: the command to run\n\
-                 - environment: one of the available environments (required)\n\
-                 \n\
-                 Choose the environment based on what tools your command needs."
-            )),
+            instructions: Some(desc),
         }
     }
 }
