@@ -19,10 +19,10 @@ memory_mb = 512           # Memory limit for sandbox
 # ─────────────────────────────────────────────────────────────────
 
 [project]
-path = "."              # Project directory (default: current directory)
+path = "."               # Project directory (default: current directory)
 mount_point = "/project" # Where to mount inside sandbox (default: /project)
 # Note: Project is always mounted read-only. Use Claude's Edit tool for modifications.
-# use_flake = false     # Create "project" env from project's devShell (Phase 2a.4)
+# use_flake = true       # Create "project" env from project's devShell (requires flake.nix)
 #
 # [project.inherit_env]
 # vars = ["DATABASE_URL", "RUST_LOG"]  # Host env vars to pass into sandbox
@@ -50,15 +50,21 @@ preset = "node"
 # Custom environments (examples - uncomment to use)
 # ─────────────────────────────────────────────────────────────────
 
+# Custom flake with explicit interpreter
+# [environments.jq-shell]
+# flake = "nixpkgs#jq"          # Any flake reference (nixpkgs, github:, local path)
+# interpreter = "bash -s"       # Optional: default is "bash -s"
+
+# Python environment from nixpkgs
+# [environments.python-alt]
+# flake = "nixpkgs#python3"
+# interpreter = "python3 -c"
+
 # Reference your own flake
 # [environments.dev]
 # flake = "github:myorg/dev-envs#default"
 
-# Local project flake
-# [environments.project]
-# flake = "/home/user/myproject#sandbox"
-
-# Use microVM for untrusted code
+# Use microVM for untrusted code (Phase 3)
 # [environments.untrusted]
 # flake = "github:someone/env#thing"
 # backend = "microvm"

@@ -23,6 +23,7 @@ rec {
     stdinMode ? "arg",  # "arg" = pass as argument, "pipe" = pipe to stdin
     projectPath ? null,
     projectMount ? "/project",
+    inheritVars ? [],  # Environment variable names to inherit from host
   }:
     let
       # The runner script that executes inside the jail
@@ -42,6 +43,16 @@ rec {
           exec ${interpreter}
         '';
 
+      # Capture inherited environment variables at build time
+      # Note: builtins.getEnv only works in impure mode, so this only
+      # captures vars during impure builds (which is fine for development)
+      inheritedEnvCombs = builtins.filter (x: x != null) (
+        map (varName:
+          let val = builtins.getEnv varName;
+          in if val != "" then { name = varName; value = val; } else null
+        ) inheritVars
+      );
+
       # Wrap with jail.nix
       # jail returns a derivation with bin/sandbox-${name} executable
       # Pass the explicit path to the runner script executable
@@ -52,6 +63,9 @@ rec {
           projectCombs = if projectPath != null then [
             (c.ro-bind projectPath projectMount)
           ] else [];
+
+          # Environment variable combinators
+          envVarCombs = map (e: c.set-env e.name e.value) inheritedEnvCombs;
         in [
           # Minimal base: fake /proc, /dev, coreutils, bash
           c.base
@@ -70,7 +84,7 @@ rec {
 
           # Minimal environment variables
           (c.set-env "TERM" "dumb")
-        ] ++ projectCombs);
+        ] ++ projectCombs ++ envVarCombs);
     in
       # Return derivation with /bin/run pointing to the jailed script
       # ${jailed} is a derivation with bin/sandbox-${name} executable
