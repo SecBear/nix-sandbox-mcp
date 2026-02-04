@@ -33,6 +33,35 @@
 
 **Plan**: `thoughts/shared/plans/2026-02-02-phase2b-sessions-spike.md`
 
+### Phase 2c: Decoupled Sandbox Architecture
+
+**Goal**: Allow operators to add custom sandboxes without rebuilding the server.
+
+**Approach**: Sandbox artifacts
+- Server ships with base environments (python, shell, node)
+- Custom sandboxes are separate Nix derivations with standard structure
+- Daemon loads additional sandboxes from paths in config at runtime
+- `nix-sandbox-mcp.lib.mkSandbox` for building sandbox artifacts
+
+**Key Design**:
+- Operator complexity, Claude simplicity
+- Claude interface unchanged: `{"code": "...", "env": "name"}`
+- No context bloat - just env names exposed
+- Backend-agnostic (works with jail now, microvm later)
+
+**Config**:
+```toml
+# Built-in presets (bundled)
+[environments.python]
+preset = "python"
+
+# Custom sandboxes (loaded at runtime)
+[environments.python-data]
+sandbox = "/nix/store/xxx-python-data"
+```
+
+**Plan**: `thoughts/shared/plans/2026-02-03-phase2c-decoupled-sandboxes.md`
+
 ### Phase 3: microVM Backend
 
 **Goal**: Stronger isolation for untrusted code scenarios.
@@ -68,22 +97,25 @@ packages = ["numpy", "pandas", "matplotlib"]
 
 **Why deferred**:
 - Adds complexity to the Nix layer
-- Operators can already create custom flakes with any packages
-- `python.withPackages` pattern works today via flake references
+- Phase 2c provides a better solution via `mkSandbox`
+- `python.withPackages` pattern works well
 
-**Workaround**: Create a custom flake with desired packages:
+**Solution (Phase 2c)**: Create a sandbox with `mkSandbox`:
 ```nix
-# my-env/flake.nix
+# my-sandboxes/flake.nix
 {
-  outputs = { nixpkgs, ... }: {
-    packages.x86_64-linux.default =
-      nixpkgs.legacyPackages.x86_64-linux.python3.withPackages (ps: [
-        ps.numpy ps.pandas ps.matplotlib
-      ]);
+  inputs.nix-sandbox-mcp.url = "github:owner/nix-sandbox-mcp";
+
+  outputs = { nixpkgs, nix-sandbox-mcp, ... }: {
+    packages.x86_64-linux.data-science = nix-sandbox-mcp.lib.mkSandbox {
+      name = "data-science";
+      packages = [ (pkgs.python3.withPackages (ps: [ ps.numpy ps.pandas ])) ];
+      interpreter = "python3 -c";
+    };
   };
 }
 ```
-Then reference: `flake = "/path/to/my-env"`
+Then in config: `sandbox = "/path/to/result"`
 
 ### Per-Environment Network Control
 
@@ -94,7 +126,7 @@ preset = "python"
 network = true
 ```
 
-**Status**: May add in Phase 2c or 3. Currently all environments have network disabled for security.
+**Status**: Can be added to `mkSandbox` options in Phase 2c. Currently all environments have network disabled for security. Network-enabled sandboxes would be opt-in at the sandbox definition level, not runtime.
 
 ### Rich Sandbox Spec for Claude
 
@@ -112,4 +144,5 @@ Exposing detailed metadata (packages, limits, capabilities) to Claude.
 - Phase 1 plan: `thoughts/shared/plans/2026-02-01-phase1-mvp-nix-layer.md`
 - Phase 2a plan: `thoughts/shared/plans/2026-02-02-phase2a-run-tool-and-project-context.md`
 - Phase 2b plan: `thoughts/shared/plans/2026-02-02-phase2b-sessions-spike.md`
+- Phase 2c plan: `thoughts/shared/plans/2026-02-03-phase2c-decoupled-sandboxes.md`
 - Claude's ideal sandbox feedback: See git history for context
