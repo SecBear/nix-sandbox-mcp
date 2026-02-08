@@ -107,13 +107,26 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> SandboxServer<B> {
             "Running code"
         );
 
+        // Resolve project dir for runtime mounting
+        let project_dir = self.config.resolved_project_dir();
+        let project_mount = self.config.project_mount();
+
         // Dispatch: session → SessionManager, no session → ephemeral backend
         let result = if let Some(ref session_id) = params.session {
             self.session_manager
-                .execute(session_id, env_name, env_meta, code)
+                .execute(
+                    session_id,
+                    env_name,
+                    env_meta,
+                    code,
+                    project_dir.as_deref(),
+                    &project_mount,
+                )
                 .await
         } else {
-            self.backend.execute(env_meta, code).await
+            self.backend
+                .execute(env_meta, code, project_dir.as_deref(), &project_mount)
+                .await
         };
 
         Ok(match result {
@@ -241,6 +254,8 @@ mod tests {
             &self,
             _env: &EnvironmentMeta,
             code: &str,
+            _project_dir: Option<&std::path::Path>,
+            _project_mount: &str,
         ) -> anyhow::Result<ExecutionResult> {
             Ok(ExecutionResult {
                 exit_code: 0,
@@ -260,6 +275,7 @@ mod tests {
                 session_exec: None,
                 timeout_seconds: 30,
                 memory_mb: 512,
+                interpreter_type: None,
             },
         );
         Config {

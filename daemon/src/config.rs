@@ -4,10 +4,11 @@
 //! environment variable as JSON.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use tracing::{debug, info, warn};
 
 /// Top-level configuration for the daemon.
 #[derive(Debug, Clone, Deserialize)]
@@ -86,12 +87,138 @@ impl Config {
         Ok(config)
     }
 
+    /// Resolve the project directory to an absolute path.
+    ///
+    /// If `project.path` is relative, resolves it against the current working directory.
+    pub fn resolved_project_dir(&self) -> Option<PathBuf> {
+        self.project.as_ref().map(|p| {
+            if p.path.is_absolute() {
+                p.path.clone()
+            } else {
+                std::env::current_dir().unwrap_or_default().join(&p.path)
+            }
+        })
+    }
+
+    /// Get the project mount point inside the sandbox.
+    pub fn project_mount(&self) -> String {
+        self.project
+            .as_ref()
+            .map(|p| p.mount_point.clone())
+            .unwrap_or_else(|| "/project".into())
+    }
+
+    /// Scan a directory for sandbox artifacts and return discovered environments.
+    ///
+    /// Each subdirectory should contain:
+    /// - `metadata.json` with name, interpreter_type, timeout_seconds, memory_mb
+    /// - `bin/run` — ephemeral execution wrapper
+    /// - `bin/session-run` (optional) — session execution wrapper
+    ///
+    /// Invalid entries are logged and skipped.
+    pub fn scan_sandbox_dir(dir: &Path) -> HashMap<String, EnvironmentMeta> {
+        let mut envs = HashMap::new();
+
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                debug!(path = %dir.display(), error = %e, "Cannot read sandbox directory");
+                return envs;
+            }
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(error = %e, "Error reading sandbox directory entry");
+                    continue;
+                }
+            };
+
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            // Parse metadata.json
+            let meta_path = path.join("metadata.json");
+            let meta_str = match std::fs::read_to_string(&meta_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(path = %meta_path.display(), error = %e, "Skipping sandbox: cannot read metadata.json");
+                    continue;
+                }
+            };
+
+            let artifact_meta: SandboxArtifactMeta = match serde_json::from_str(&meta_str) {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(path = %meta_path.display(), error = %e, "Skipping sandbox: invalid metadata.json");
+                    continue;
+                }
+            };
+
+            // Verify bin/run exists
+            let run_path = path.join("bin/run");
+            if !run_path.exists() {
+                warn!(sandbox = %artifact_meta.name, path = %run_path.display(), "Skipping sandbox: bin/run not found");
+                continue;
+            }
+
+            // Check for optional bin/session-run
+            let session_run_path = path.join("bin/session-run");
+            let session_exec = if session_run_path.exists() {
+                Some(session_run_path.to_string_lossy().into_owned())
+            } else {
+                None
+            };
+
+            let env_meta = EnvironmentMeta {
+                backend: BackendType::Jail,
+                exec: run_path.to_string_lossy().into_owned(),
+                session_exec,
+                timeout_seconds: artifact_meta.timeout_seconds,
+                memory_mb: artifact_meta.memory_mb,
+                interpreter_type: Some(artifact_meta.interpreter_type),
+            };
+
+            info!(name = %artifact_meta.name, path = %path.display(), "Discovered sandbox");
+            envs.insert(artifact_meta.name, env_meta);
+        }
+
+        envs
+    }
+
+    /// Merge discovered sandbox environments into the config.
+    ///
+    /// Custom sandboxes override bundled presets on name collision (with info log).
+    pub fn merge_environments(&mut self, extra: HashMap<String, EnvironmentMeta>) {
+        for (name, meta) in extra {
+            if self.environments.contains_key(&name) {
+                info!(name = %name, "Custom sandbox overrides bundled environment");
+            }
+            self.environments.insert(name, meta);
+        }
+    }
+
     /// Create a config from a JSON string (for testing).
     #[cfg(test)]
     pub fn from_json(json: &str) -> Result<Self> {
         let config: Self = serde_json::from_str(json).context("Failed to parse JSON")?;
         Ok(config)
     }
+}
+
+/// Metadata parsed from a sandbox artifact's `metadata.json`.
+#[derive(Debug, Deserialize)]
+struct SandboxArtifactMeta {
+    name: String,
+    interpreter_type: String,
+    #[serde(default = "default_timeout")]
+    timeout_seconds: u64,
+    #[serde(default = "default_memory")]
+    memory_mb: u64,
 }
 
 /// Metadata for a single execution environment.
@@ -116,6 +243,12 @@ pub struct EnvironmentMeta {
     /// Memory limit in megabytes.
     #[serde(default = "default_memory")]
     pub memory_mb: u64,
+
+    /// Interpreter type for this environment (e.g., "python", "bash", "node").
+    /// Used to map custom sandbox environments to the correct agent interpreter.
+    /// If None, falls back to name-based matching for bundled presets.
+    #[serde(default)]
+    pub interpreter_type: Option<String>,
 }
 
 /// Available isolation backends.
@@ -181,8 +314,182 @@ mod tests {
         assert_eq!(shell.timeout_seconds, 30);
         assert_eq!(shell.memory_mb, 512);
 
+        // interpreter_type defaults to None when not in JSON
+        assert!(python.interpreter_type.is_none());
+
         // No project config
         assert!(config.project.is_none());
+    }
+
+    #[test]
+    fn parse_metadata_with_interpreter_type() {
+        let json = r#"{
+            "environments": {
+                "data-science": {
+                    "backend": "jail",
+                    "exec": "/nix/store/xxx/bin/run",
+                    "interpreter_type": "python"
+                }
+            }
+        }"#;
+
+        let config = Config::from_json(json).unwrap();
+        let ds = &config.environments["data-science"];
+        assert_eq!(ds.interpreter_type.as_deref(), Some("python"));
+    }
+
+    #[test]
+    fn scan_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let envs = Config::scan_sandbox_dir(dir.path());
+        assert!(envs.is_empty());
+    }
+
+    #[test]
+    fn scan_nonexistent_dir() {
+        let envs = Config::scan_sandbox_dir(std::path::Path::new("/nonexistent/path"));
+        assert!(envs.is_empty());
+    }
+
+    #[test]
+    fn scan_valid_sandbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let sandbox = dir.path().join("data-science");
+        std::fs::create_dir_all(sandbox.join("bin")).unwrap();
+
+        // Write metadata.json
+        std::fs::write(
+            sandbox.join("metadata.json"),
+            r#"{"name": "data-science", "interpreter_type": "python", "timeout_seconds": 60, "memory_mb": 1024}"#,
+        ).unwrap();
+
+        // Create bin/run (just needs to exist)
+        std::fs::write(sandbox.join("bin/run"), "#!/bin/sh\n").unwrap();
+
+        let envs = Config::scan_sandbox_dir(dir.path());
+        assert_eq!(envs.len(), 1);
+        assert!(envs.contains_key("data-science"));
+
+        let meta = &envs["data-science"];
+        assert_eq!(meta.interpreter_type.as_deref(), Some("python"));
+        assert_eq!(meta.timeout_seconds, 60);
+        assert_eq!(meta.memory_mb, 1024);
+        assert!(meta.exec.ends_with("bin/run"));
+        assert!(meta.session_exec.is_none());
+    }
+
+    #[test]
+    fn scan_sandbox_with_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let sandbox = dir.path().join("my-env");
+        std::fs::create_dir_all(sandbox.join("bin")).unwrap();
+
+        std::fs::write(
+            sandbox.join("metadata.json"),
+            r#"{"name": "my-env", "interpreter_type": "bash"}"#,
+        )
+        .unwrap();
+        std::fs::write(sandbox.join("bin/run"), "#!/bin/sh\n").unwrap();
+        std::fs::write(sandbox.join("bin/session-run"), "#!/bin/sh\n").unwrap();
+
+        let envs = Config::scan_sandbox_dir(dir.path());
+        let meta = &envs["my-env"];
+        assert!(meta.session_exec.is_some());
+    }
+
+    #[test]
+    fn scan_skips_missing_bin_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let sandbox = dir.path().join("broken");
+        std::fs::create_dir_all(&sandbox).unwrap();
+
+        std::fs::write(
+            sandbox.join("metadata.json"),
+            r#"{"name": "broken", "interpreter_type": "python"}"#,
+        )
+        .unwrap();
+        // No bin/run — should be skipped
+
+        let envs = Config::scan_sandbox_dir(dir.path());
+        assert!(envs.is_empty());
+    }
+
+    // Validate custom sandboxes override bundled presets on name collision.
+    // Create a Config with a "python" environment, merge in another "python"
+    // from scanning, and assert the merged version wins.
+    #[test]
+    fn merge_environments_override() {
+        let json = r#"{
+            "environments": {
+                "python": {
+                    "backend": "jail",
+                    "exec": "/nix/store/xxx-python-sandbox/bin/run",
+                    "timeout_seconds": 30,
+                    "memory_mb": 512
+                }
+            }
+        }"#;
+
+        // create a Config with a bundled "python" environment,
+        let mut config = Config::from_json(json).unwrap();
+
+        // then call merge_environments() with a HashMap containing a different "python" entry (e.g., different exec path)
+        let env_meta = EnvironmentMeta {
+            backend: BackendType::Jail,
+            exec: String::from("/custom/bin/run"),
+            interpreter_type: Some("python".to_string()),
+            session_exec: Some("/some/path".to_string()),
+            timeout_seconds: 30,
+            memory_mb: 512,
+        };
+        let envs = HashMap::from([(String::from("python"), env_meta)]);
+
+        // and assert the merged version wins.
+        config.merge_environments(envs);
+        assert_eq!(config.environments["python"].exec, "/custom/bin/run");
+    }
+
+    #[test]
+    fn merge_environments_additive() {
+        // merge in "ruby" alongside "python" override, assert config now has both
+        let json = r#"{
+            "environments": {
+                "python": {
+                    "backend": "jail",
+                    "exec": "/nix/store/xxx-python-sandbox/bin/run",
+                    "timeout_seconds": 30,
+                    "memory_mb": 512
+                }
+            }
+        }"#;
+
+        let mut config = Config::from_json(json).unwrap();
+
+        let env_meta_python = EnvironmentMeta {
+            backend: BackendType::Jail,
+            exec: String::from("/custom/bin/run"),
+            interpreter_type: Some("python".to_string()),
+            session_exec: Some("/some/path".to_string()),
+            timeout_seconds: 30,
+            memory_mb: 512,
+        };
+
+        let env_meta_ruby = EnvironmentMeta {
+            backend: BackendType::Jail,
+            exec: String::from("/custom-ruby/bin/run"),
+            interpreter_type: Some("bash".to_string()),
+            session_exec: Some("/some/other/path".to_string()),
+            timeout_seconds: 30,
+            memory_mb: 512,
+        };
+        let envs = HashMap::from([
+            (String::from("python"), env_meta_python),
+            (String::from("ruby"), env_meta_ruby),
+        ]);
+
+        config.merge_environments(envs);
+        assert_eq!(config.environments["python"].exec, "/custom/bin/run");
+        assert_eq!(config.environments["ruby"].exec, "/custom-ruby/bin/run");
     }
 
     #[test]

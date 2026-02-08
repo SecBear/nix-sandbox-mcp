@@ -34,13 +34,24 @@ impl StdioPipeTransport {
     ///
     /// `exec_path` is the path to the session jail wrapper (which runs the agent).
     /// `ready_timeout` is how long to wait for the agent's Ready message.
-    pub async fn spawn(exec_path: &str, ready_timeout: Duration) -> Result<Self> {
+    /// `env_vars` is an optional list of extra environment variables to set.
+    pub async fn spawn(
+        exec_path: &str,
+        ready_timeout: Duration,
+        env_vars: &[(String, String)],
+    ) -> Result<Self> {
         debug!(exec = %exec_path, "Spawning agent process");
 
-        let mut child = tokio::process::Command::new(exec_path)
-            .stdin(Stdio::piped())
+        let mut cmd = tokio::process::Command::new(exec_path);
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
+
+        let mut child = cmd
             .spawn()
             .with_context(|| format!("Failed to spawn agent: {exec_path}"))?;
 

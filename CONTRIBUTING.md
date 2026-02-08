@@ -37,8 +37,8 @@ nix flake check
 nix-sandbox-mcp/
 ├── daemon/                           # Rust MCP server (rmcp crate)
 │   └── src/
-│       ├── main.rs                   # Entry point, loads metadata
-│       ├── config.rs                 # Parse environments.json
+│       ├── main.rs                   # Entry point, loads metadata, scans sandbox dir
+│       ├── config.rs                 # Parse metadata, scan sandbox artifacts, merge envs
 │       ├── mcp.rs                    # MCP server, run tool handler
 │       ├── session.rs                # Session lifecycle management
 │       ├── backend.rs                # Backend trait + JailBackend
@@ -57,14 +57,39 @@ nix-sandbox-mcp/
 │   │   ├── jail.nix                  # jail.nix backend (mkJailedEnv + mkSessionJailedEnv)
 │   │   └── microvm.nix              # microvm.nix backend (planned)
 │   └── lib/
+│       ├── mkSandbox.nix             # Build standalone sandbox artifacts (Phase 2c)
 │       ├── mkEnvironment.nix         # env def + backend -> built artifact
 │       ├── fromToml.nix              # Parse TOML config, build all envs
 │       └── mkMetadata.nix            # Generate environments.json
 │
 ├── config.example.toml               # Reference configuration
-├── flake.nix                         # Main entry point
+├── flake.nix                         # Main entry point (exposes lib.mkSandbox)
 └── flake.lock
 ```
+
+## Architecture: Sandbox Artifacts (Phase 2c)
+
+Custom sandboxes are standalone Nix derivations with a standard layout:
+
+```
+/nix/store/xxx-sandbox-data-science/
+  metadata.json       # {name, interpreter_type, timeout_seconds, memory_mb}
+  bin/run             # Ephemeral execution (jailed via bubblewrap)
+  bin/session-run     # Session execution (jailed, runs sandbox_agent.py)
+```
+
+**Discovery flow:**
+1. Daemon starts → scans `$NIX_SANDBOX_DIR` or `~/.config/nix-sandbox-mcp/sandboxes/`
+2. Each subdirectory is parsed: read `metadata.json`, verify `bin/run` exists
+3. Discovered environments are merged with bundled presets (custom overrides on collision)
+4. Adding/removing sandboxes requires restarting the MCP server
+
+**Build-time vs runtime project mounting:**
+- **Bundled presets** (via `fromToml.nix`): use `c.ro-bind` — project path baked into the derivation at build time
+- **mkSandbox artifacts**: use `c.add-runtime` — check `$PROJECT_DIR` env var at bwrap invocation time
+- This means mkSandbox artifacts are project-agnostic: same Nix store path, different projects
+
+**`interpreter_type`** maps custom environments to agent interpreters. The agent supports exactly three: `python`, `bash`, `node`. A "data-science" sandbox with `interpreter_type = "python"` uses the Python interpreter with custom packages on PATH.
 
 ## Architecture: Session Persistence
 

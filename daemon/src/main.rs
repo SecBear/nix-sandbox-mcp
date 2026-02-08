@@ -3,11 +3,12 @@
 //! Minimal MCP server that dispatches code execution to Nix-built sandboxes.
 //! Environment metadata is passed via `NIX_SANDBOX_METADATA` env var.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use tracing::info;
+use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 
 use nix_sandbox_mcp_daemon::{
@@ -30,6 +31,13 @@ struct Args {
     log_level: String,
 }
 
+/// Get a path from an environment variable, falling back to root.
+fn dirs_or_default(var: &str) -> PathBuf {
+    std::env::var(var)
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/"))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -43,7 +51,25 @@ async fn main() -> Result<()> {
         .init();
 
     // Load environment metadata from Nix wrapper
-    let config = Config::from_env().context("Failed to load configuration")?;
+    let mut config = Config::from_env().context("Failed to load configuration")?;
+
+    // Scan for custom sandbox artifacts
+    let sandbox_dir = std::env::var("NIX_SANDBOX_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs_or_default("HOME")
+                .join(".config/nix-sandbox-mcp/sandboxes")
+        });
+
+    if sandbox_dir.is_dir() {
+        let extra = Config::scan_sandbox_dir(&sandbox_dir);
+        if !extra.is_empty() {
+            info!(count = extra.len(), dir = %sandbox_dir.display(), "Discovered custom sandboxes");
+            config.merge_environments(extra);
+        }
+    } else {
+        debug!(dir = %sandbox_dir.display(), "Sandbox directory does not exist, skipping scan");
+    }
 
     info!(
         environments = ?config.environments.keys().collect::<Vec<_>>(),

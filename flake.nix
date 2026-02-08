@@ -97,6 +97,15 @@
             "presets.shell" = presets.shell;
             "presets.python" = presets.python;
             "presets.node" = presets.node;
+
+            # Test sandbox artifact (validates mkSandbox pipeline)
+            "test-sandbox" = import ./nix/lib/mkSandbox.nix {
+              inherit pkgs jail agentPkg;
+            } {
+              name = "test-sandbox";
+              interpreter_type = "python";
+              packages = [ pkgs.python3 ];
+            };
           };
 
           # Debug outputs for development
@@ -159,6 +168,16 @@
           };
         };
 
-      flake = { };
+      flake = {
+        # Public library: build standalone sandbox artifacts
+        lib.mkSandbox =
+          { pkgs, ... }@args:
+          let
+            jail = inputs.jail-nix.lib.init pkgs;
+            agentPkg = import ./agent { inherit pkgs; };
+            fn = import ./nix/lib/mkSandbox.nix { inherit pkgs jail agentPkg; };
+          in
+          fn (builtins.removeAttrs args [ "pkgs" ]);
+      };
     };
 }

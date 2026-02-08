@@ -9,11 +9,12 @@
 
 ## Current State
 
-**Phase 2b** (Complete)
-- Sessions with persistent Python/Bash/Node state
-- Length-prefixed JSON IPC protocol with sandbox agent
-- Session lifecycle management (idle timeout, max lifetime, reaper)
-- All Phase 2a features (run tool, project mounting, custom flakes)
+**Phase 2c** (Complete)
+- Decoupled sandbox architecture: custom sandboxes without server rebuild
+- `mkSandbox` function for building standalone sandbox artifacts
+- Directory scanning at startup (`~/.config/nix-sandbox-mcp/sandboxes/`)
+- Runtime project mounting via `PROJECT_DIR` env var
+- All Phase 2b features (sessions, IPC protocol, lifecycle management)
 
 ## Completed Phases
 
@@ -30,34 +31,19 @@
 - Node: custom REPL (no prompt, no echo, let/const persistence)
 - Lazy interpreter instantiation within sessions
 
+### Phase 2c: Decoupled Sandbox Architecture ✅
+
+**Implemented**: Standalone sandbox artifacts loaded at startup.
+
+- `lib.mkSandbox` function: `{ pkgs, name, interpreter_type, packages }` → derivation with `metadata.json` + `bin/run` + `bin/session-run`
+- Daemon scans `~/.config/nix-sandbox-mcp/sandboxes/` (or `$NIX_SANDBOX_DIR`) at startup
+- Custom sandboxes override bundled presets on name collision
+- Runtime project mounting via `PROJECT_DIR`/`PROJECT_MOUNT` env vars
+- `interpreter_type` field on `EnvironmentMeta` — explicit mapping to agent interpreters
+- Sandbox artifacts are project-agnostic (build once, use everywhere)
+- `runtimeProjectMount` flag on jail.nix's `mkJailedEnv`/`mkSessionJailedEnv` — uses `c.add-runtime` for dynamic project binding
+
 ## Planned Phases
-
-### Phase 2c: Decoupled Sandbox Architecture
-
-**Goal**: Allow operators to add custom sandboxes without rebuilding the server.
-
-**Approach**: Sandbox artifacts
-- Server ships with base environments (python, shell, node)
-- Custom sandboxes are separate Nix derivations with standard structure
-- Daemon loads additional sandboxes from paths in config at runtime
-- `nix-sandbox-mcp.lib.mkSandbox` for building sandbox artifacts
-
-**Key Design**:
-- Operator complexity, Claude simplicity
-- Claude interface unchanged: `{"code": "...", "env": "name"}`
-- No context bloat - just env names exposed
-- Backend-agnostic (works with jail now, microvm later)
-
-**Config**:
-```toml
-# Built-in presets (bundled)
-[environments.python]
-preset = "python"
-
-# Custom sandboxes (loaded at runtime)
-[environments.python-data]
-sandbox = "/nix/store/xxx-python-data"
-```
 
 ### Phase 3: microVM Backend
 

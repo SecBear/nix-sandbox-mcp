@@ -6,6 +6,7 @@
 //! `env` on an existing session returns an error.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -179,6 +180,8 @@ impl SessionManager {
         env_name: &str,
         env_meta: &EnvironmentMeta,
         code: &str,
+        project_dir: Option<&Path>,
+        project_mount: &str,
     ) -> Result<ExecutionResult> {
         // Per-session lock: serializes all operations on this session.
         // First task to reach here wins; others queue behind it.
@@ -186,11 +189,11 @@ impl SessionManager {
         let _guard = exec_lock.lock().await;
 
         let session = self
-            .get_or_create(session_id, env_name, env_meta)
+            .get_or_create(session_id, env_name, env_meta, project_dir, project_mount)
             .await?;
 
         // Map env_name to interpreter name for the agent protocol
-        let interpreter = env_to_interpreter(env_name);
+        let interpreter = env_to_interpreter(env_name, env_meta);
 
         let req = AgentRequest::Execute {
             id: session_id.to_string(),
@@ -232,6 +235,8 @@ impl SessionManager {
         session_id: &str,
         env_name: &str,
         env_meta: &EnvironmentMeta,
+        project_dir: Option<&Path>,
+        project_mount: &str,
     ) -> Result<Arc<Session>> {
         // Check for existing session
         {
@@ -258,8 +263,15 @@ impl SessionManager {
             )
         })?;
 
+        // Build env vars for the agent process (for runtime project mounting)
+        let mut env_vars = Vec::new();
+        if let Some(dir) = project_dir {
+            env_vars.push(("PROJECT_DIR".to_string(), dir.to_string_lossy().into_owned()));
+            env_vars.push(("PROJECT_MOUNT".to_string(), project_mount.to_string()));
+        }
+
         let transport =
-            StdioPipeTransport::spawn(session_exec, self.config.agent_ready_timeout).await
+            StdioPipeTransport::spawn(session_exec, self.config.agent_ready_timeout, &env_vars).await
                 .with_context(|| {
                     format!("Failed to start session agent for '{env_name}'")
                 })?;
@@ -355,14 +367,20 @@ impl SessionManager {
 /// Map environment name to interpreter name for the agent protocol.
 ///
 /// The agent supports "python", "bash", and "node" interpreters.
-/// Environment names map to these via convention.
-fn env_to_interpreter(env_name: &str) -> String {
+/// If `interpreter_type` is set on the environment metadata (from custom
+/// sandbox artifacts), use that directly. Otherwise, fall back to
+/// name-based matching for bundled presets.
+fn env_to_interpreter(env_name: &str, env_meta: &EnvironmentMeta) -> String {
+    // Custom sandboxes set interpreter_type explicitly
+    if let Some(ref itype) = env_meta.interpreter_type {
+        return itype.clone();
+    }
+
+    // Bundled preset name-based mapping
     match env_name {
         "python" => "python".to_string(),
         "shell" => "bash".to_string(),
         "node" => "node".to_string(),
-        // For custom environments, use the env name as interpreter name.
-        // The agent will try to match it.
         other => other.to_string(),
     }
 }
@@ -371,12 +389,34 @@ fn env_to_interpreter(env_name: &str) -> String {
 mod tests {
     use super::*;
 
+    fn meta_with_interpreter_type(itype: Option<&str>) -> EnvironmentMeta {
+        EnvironmentMeta {
+            backend: crate::config::BackendType::Jail,
+            exec: "/bin/test".to_string(),
+            session_exec: None,
+            timeout_seconds: 30,
+            memory_mb: 512,
+            interpreter_type: itype.map(String::from),
+        }
+    }
+
     #[test]
     fn test_env_to_interpreter() {
-        assert_eq!(env_to_interpreter("python"), "python");
-        assert_eq!(env_to_interpreter("shell"), "bash");
-        assert_eq!(env_to_interpreter("node"), "node");
-        assert_eq!(env_to_interpreter("custom"), "custom");
+        let meta_none = meta_with_interpreter_type(None);
+        assert_eq!(env_to_interpreter("python", &meta_none), "python");
+        assert_eq!(env_to_interpreter("shell", &meta_none), "bash");
+        assert_eq!(env_to_interpreter("node", &meta_none), "node");
+        assert_eq!(env_to_interpreter("custom", &meta_none), "custom");
+    }
+
+    #[test]
+    fn test_env_to_interpreter_with_interpreter_type() {
+        let meta_python = meta_with_interpreter_type(Some("python"));
+        // interpreter_type overrides name-based matching
+        assert_eq!(env_to_interpreter("data-science", &meta_python), "python");
+
+        let meta_bash = meta_with_interpreter_type(Some("bash"));
+        assert_eq!(env_to_interpreter("rust-dev", &meta_bash), "bash");
     }
 
     #[test]

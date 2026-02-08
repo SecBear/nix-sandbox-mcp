@@ -24,6 +24,7 @@ rec {
     projectPath ? null,
     projectMount ? "/project",
     inheritVars ? [],  # Environment variable names to inherit from host
+    runtimeProjectMount ? false,  # Use PROJECT_DIR env var at runtime instead of build-time bind
   }:
     let
       # The runner script that executes inside the jail
@@ -58,9 +59,16 @@ rec {
       # Pass the explicit path to the runner script executable
       jailed = jail "sandbox-${name}" "${runnerScript}/bin/runner-${name}" (c:
         let
-          # Project mounting combinator (if project path configured)
-          # Always read-only for security and reproducibility
-          projectCombs = if projectPath != null then [
+          # Project mounting combinator
+          # runtimeProjectMount: check PROJECT_DIR env var at runtime (for mkSandbox artifacts)
+          # projectPath: bind at build time (for bundled presets built via fromToml.nix)
+          projectCombs = if runtimeProjectMount then [
+            (c.add-runtime ''
+              if [ -n "''${PROJECT_DIR:-}" ] && [ -d "$PROJECT_DIR" ]; then
+                RUNTIME_ARGS+=(--ro-bind "$PROJECT_DIR" "''${PROJECT_MOUNT:-/project}")
+              fi
+            '')
+          ] else if projectPath != null then [
             (c.ro-bind projectPath projectMount)
           ] else [];
 
@@ -128,6 +136,7 @@ rec {
     env,
     projectPath ? null,
     projectMount ? "/project",
+    runtimeProjectMount ? false,
   }:
     assert agentPkg != null;
     let
@@ -146,6 +155,6 @@ rec {
       env = sessionEnv;
       interpreter = "sandbox-agent";
       stdinMode = "pipe";
-      inherit projectPath projectMount;
+      inherit projectPath projectMount runtimeProjectMount;
     };
 }

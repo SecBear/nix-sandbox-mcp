@@ -200,6 +200,7 @@ nix-sandbox-mcp/
 │   │   └── microvm.nix            # microvm.nix backend (planned)
 │   │
 │   └── lib/
+│       ├── mkSandbox.nix          # Build standalone sandbox artifacts
 │       ├── mkEnvironment.nix      # env def + backend → built artifact
 │       ├── fromToml.nix           # Parse TOML config, build all envs
 │       └── mkMetadata.nix         # Generate environments.json
@@ -241,6 +242,13 @@ nix-sandbox-mcp/
 - [x] Writable /workspace within sessions
 - [x] `session` parameter on `run` tool
 
+### Phase 2c: Decoupled Sandbox Architecture ✅
+- [x] `mkSandbox` function for standalone sandbox artifacts
+- [x] Directory scanning for custom sandboxes at startup
+- [x] Runtime project mounting via `PROJECT_DIR` env var
+- [x] `interpreter_type` field on environment metadata
+- [x] Custom sandboxes override bundled presets on name collision
+
 ### Phase 3: MicroVM Backend (Planned)
 - [ ] microvm.nix integration
 - [ ] Hardware-level isolation for untrusted code
@@ -248,33 +256,81 @@ nix-sandbox-mcp/
 
 ## Custom Environments
 
-You can add custom environments by referencing any Nix flake in `config.toml`. This lets you define sandboxes with exactly the packages you need.
+### Decoupled Sandboxes (Recommended)
 
-### Step 1: Create a flake that exports a package
+Build standalone sandbox artifacts with `mkSandbox` — no server rebuild required.
 
-The flake should export a `buildEnv` with the packages you want available in the sandbox:
+#### Step 1: Create a flake with `mkSandbox`
 
 ```nix
 # my-envs/flake.nix
 {
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nix-sandbox-mcp.url = "github:secbear/nix-sandbox-mcp";
+  };
 
-  outputs = { nixpkgs, ... }:
+  outputs = { nixpkgs, nix-sandbox-mcp, ... }:
     let pkgs = nixpkgs.legacyPackages.x86_64-linux;
     in {
-      packages.x86_64-linux.default = pkgs.buildEnv {
+      packages.x86_64-linux.data-science = nix-sandbox-mcp.lib.mkSandbox {
+        inherit pkgs;
         name = "data-science";
-        paths = [
+        interpreter_type = "python";  # required: "python", "bash", or "node"
+        packages = [
           (pkgs.python3.withPackages (ps: [ ps.numpy ps.pandas ps.requests ]))
-          pkgs.jq
-          pkgs.ripgrep
         ];
+        # timeout_seconds = 60;  # optional, default: 30
+        # memory_mb = 1024;      # optional, default: 512
       };
     };
 }
 ```
 
-### Step 2: Reference it in your config
+`interpreter_type` is **required** — it tells the session agent which interpreter to use:
+- `"python"` — Python REPL (variables persist across calls)
+- `"bash"` — Bash shell (environment persists across calls)
+- `"node"` — Node.js REPL (variables persist across calls)
+
+#### Step 2: Build and install into the sandbox directory
+
+```bash
+# Create the sandbox directory
+mkdir -p ~/.config/nix-sandbox-mcp/sandboxes
+
+# Build and symlink (local flake)
+nix build path:./my-envs#data-science \
+  -o ~/.config/nix-sandbox-mcp/sandboxes/data-science
+
+# Or from a remote flake
+nix build github:myorg/my-envs#data-science \
+  -o ~/.config/nix-sandbox-mcp/sandboxes/data-science
+```
+
+#### Step 3: Restart the MCP server
+
+Restart Claude Desktop (or your MCP client). The daemon scans the sandbox directory at startup — the new `data-science` environment will appear automatically.
+
+#### Step 4: Use it
+
+The environment is now available as `env: "data-science"` in the `run` tool. Claude can use it like any other environment:
+
+```json
+{"code": "import pandas as pd; print(pd.__version__)", "env": "data-science"}
+```
+
+Sessions work too — pass a `session` ID for persistent state across calls.
+
+#### Notes
+
+- **Project-agnostic**: The same sandbox artifact works for any project. The daemon passes the project directory at runtime via environment variables.
+- **Override bundled presets**: If your custom sandbox has the same name as a bundled preset (e.g., `"python"`), the custom version takes priority.
+- **Custom directory**: Override the sandbox directory with `$NIX_SANDBOX_DIR`. Default: `~/.config/nix-sandbox-mcp/sandboxes/`.
+- **No hot-reload**: Adding or removing sandboxes requires restarting the MCP server.
+
+### Config-Based Environments
+
+You can also add custom environments by referencing any Nix flake in `config.toml`. This requires rebuilding the server:
 
 ```toml
 [environments.data-science]
@@ -282,13 +338,9 @@ flake = "github:myorg/my-envs#default"   # or a local path: "path:./my-envs"
 interpreter = "python3 -c"               # how to run code in this env
 ```
 
-### Step 3: Rebuild
-
 ```bash
-nix build
+nix build  # Rebuild required
 ```
-
-The flake output is wrapped by the chosen backend (jail.nix) automatically — your packages end up in an isolated sandbox with no network access and a read-only filesystem.
 
 ### Quick single-package environments
 

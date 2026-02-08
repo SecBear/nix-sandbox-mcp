@@ -37,6 +37,7 @@ async-trait = "0.1"
 
 [dev-dependencies]
 tokio-test = "0.4"
+tempfile = "3"
 
 [lints.rust]
 unsafe_code = "forbid"

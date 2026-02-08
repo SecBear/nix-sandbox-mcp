@@ -3,6 +3,7 @@
 //! Executes code by forking and running the Nix-built jail wrapper.
 //! The wrapper handles all sandboxing via bubblewrap.
 
+use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::{Context, Result};
@@ -31,14 +32,28 @@ impl JailBackend {
 #[async_trait]
 impl IsolationBackend for JailBackend {
     #[instrument(skip(self, code), fields(exec = %env.exec, timeout = env.timeout_seconds))]
-    async fn execute(&self, env: &EnvironmentMeta, code: &str) -> Result<ExecutionResult> {
+    async fn execute(
+        &self,
+        env: &EnvironmentMeta,
+        code: &str,
+        project_dir: Option<&Path>,
+        project_mount: &str,
+    ) -> Result<ExecutionResult> {
         debug!(code_len = code.len(), "Executing code in jail");
 
         // Spawn the jail wrapper process
-        let mut child = Command::new(&env.exec)
-            .stdin(Stdio::piped())
+        let mut cmd = Command::new(&env.exec);
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Pass project dir as env vars for runtime mounting (mkSandbox artifacts)
+        if let Some(dir) = project_dir {
+            cmd.env("PROJECT_DIR", dir);
+            cmd.env("PROJECT_MOUNT", project_mount);
+        }
+
+        let mut child = cmd
             .spawn()
             .with_context(|| format!("Failed to spawn jail wrapper: {}", env.exec))?;
 
@@ -88,9 +103,10 @@ mod tests {
             session_exec: None,
             timeout_seconds: 5,
             memory_mb: 512,
+            interpreter_type: None,
         };
 
-        let result = backend.execute(&env, "echo hello").await.unwrap();
+        let result = backend.execute(&env, "echo hello", None, "/project").await.unwrap();
         assert_eq!(result.exit_code, 0);
         assert!(result.stdout.contains("hello"));
     }
