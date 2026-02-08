@@ -18,6 +18,7 @@ A Nix-native MCP server for reproducible, sandboxed code execution.
 
 - **Reproducible environments** — Defined via Nix flakes, bit-for-bit identical everywhere
 - **Modular isolation backends** — jail.nix (fast, namespace-based) or microvm.nix (secure, VM-based)
+- **Session persistence** — Stateful multi-turn workflows with `session` parameter
 - **MCP protocol** — Works with Claude Desktop, any MCP client
 - **Simple config** — TOML configuration, reference presets or your own flakes
 - **Minimal Rust daemon** — Handles MCP protocol and process dispatch only; Nix does the heavy lifting
@@ -188,10 +189,13 @@ nix-sandbox-mcp/
 ├── README.md
 ├── LICENSE
 │
+├── agent/
+│   └── sandbox_agent.py           # Persistent interpreter for sessions
+│
 ├── nix/
 │   ├── environments/              # Bundled preset definitions
 │   │   ├── shell.nix              # Minimal shell environment
-│   │   ├── python.nix             # Python 3 environment  
+│   │   ├── python.nix             # Python 3 environment
 │   │   ├── node.nix               # Node.js environment
 │   │   └── default.nix            # Exports all presets
 │   │
@@ -210,14 +214,10 @@ nix-sandbox-mcp/
     └── src/
         ├── main.rs                # Entry point, loads metadata
         ├── config.rs              # Parse environments.json
-        ├── mcp/
-        │   ├── mod.rs
-        │   ├── protocol.rs        # JSON-RPC types
-        │   └── handler.rs         # tools/list, tools/call
-        └── backend/
-            ├── mod.rs             # IsolationBackend trait
-            ├── jail.rs            # Fork + exec jail wrapper
-            └── microvm.rs         # VM boot + vsock (future)
+        ├── mcp.rs                 # MCP server, run tool handler
+        ├── session.rs             # Session lifecycle management
+        ├── backend.rs             # Backend trait + JailBackend
+        └── transport/             # Agent IPC (length-prefixed JSON)
 ```
 
 ## Implementation Roadmap
@@ -238,9 +238,12 @@ nix-sandbox-mcp/
 - [x] Timeout enforcement with clear error messages
 - [ ] Custom flake references in config (coming soon)
 
-### Phase 2b: Sessions (Planned)
-- [ ] Session persistence via IPC
-- [ ] Stateful sandbox interactions
+### Phase 2b: Session Persistence ✅
+- [x] Length-prefixed JSON IPC protocol
+- [x] Persistent Python/Bash/Node interpreters
+- [x] Session lifecycle management (idle timeout, cleanup)
+- [x] Writable /workspace within sessions
+- [x] `session` parameter on `run` tool
 
 ### Phase 3: MicroVM Backend (Planned)
 - [ ] microvm.nix integration
@@ -301,7 +304,7 @@ The flake output is wrapped by the chosen backend (jail.nix or microvm.nix) auto
 
 ## Contributing
 
-Contributions welcome. Please open an issue to discuss significant changes before submitting a PR.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions, architecture overview, and development guidelines.
 
 ## License
 

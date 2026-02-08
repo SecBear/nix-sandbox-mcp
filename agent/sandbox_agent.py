@@ -97,7 +97,7 @@ class BashInterpreter:
 
     def __init__(self):
         self.proc = subprocess.Popen(
-            ["bash", "--norc", "--noprofile", "-i"],
+            ["bash", "--norc", "--noprofile"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -154,19 +154,41 @@ class BashInterpreter:
 
 
 class NodeInterpreter:
-    """Persistent Node.js process with nonce markers."""
+    """Persistent Node.js REPL with custom config for clean output.
+
+    Uses require('repl').start() with:
+    - prompt: ''           — no "> " noise
+    - ignoreUndefined      — suppress undefined echo
+    - writer: () => ''     — suppress all result echo
+    - output → stderr      — REPL chrome goes to stderr, not stdout
+    - No try/catch wrap    — let/const persist in REPL top-level scope
+    """
+
+    REPL_SETUP = (
+        "const _r=require('repl').start({"
+        "input:process.stdin,"
+        "prompt:'',"
+        "ignoreUndefined:true,"
+        "writer:()=>'',"
+        "output:new(require('stream').Writable)("
+        "{write(c,e,cb){process.stderr.write(c,e,cb)}})"
+        "});"
+        "_r.context.console=new(require('console').Console)"
+        "(process.stdout,process.stderr);\n"
+    )
+    REPL_SETUP_PATH = os.path.join(os.environ.get("TMPDIR", "/tmp"), "_node_repl_setup.js")
 
     def __init__(self):
+        # Write setup to file so process.stdin is a proper stream
+        # (node -e doesn't fully initialize stdin as a readable stream)
+        with open(self.REPL_SETUP_PATH, "w") as f:
+            f.write(self.REPL_SETUP)
         self.proc = subprocess.Popen(
-            ["node", "-i"],
+            ["node", self.REPL_SETUP_PATH],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        # Consume the Node REPL welcome banner
-        # Node -i prints something like "> " on startup
-        # We'll use markers to delimit output, so the banner is harmless
-        # but we need to set up marker-based output reading
 
     def execute(self, code: str) -> tuple[str, str, int]:
         """Execute code, returning (stdout, stderr, exit_code)."""
@@ -174,10 +196,12 @@ class NodeInterpreter:
         stdout_marker = f"__STDOUT_DONE_{nonce}__"
         stderr_marker = f"__STDERR_DONE_{nonce}__"
 
-        # Wrap code in try/catch and emit markers
+        # Send code directly (no try/catch — preserves let/const scope)
+        # .break cancels any pending multiline input mode
         wrapped = (
-            f"try {{ {code} }} catch(e) {{ process.stderr.write(e.stack + '\\n'); }}\n"
-            f"console.log('{stdout_marker}');\n"
+            f"{code}\n"
+            f".break\n"
+            f"process.stdout.write('{stdout_marker}\\n');\n"
             f"process.stderr.write('{stderr_marker}\\n');\n"
         )
 
@@ -189,18 +213,15 @@ class NodeInterpreter:
             decoded = line.decode(errors="replace")
             if stdout_marker in decoded:
                 break
-            # Filter out REPL prompt artifacts
-            cleaned = decoded.lstrip("> ").lstrip("... ")
-            if cleaned.strip() == "undefined":
-                continue
-            stdout_lines.append(cleaned)
+            stdout_lines.append(decoded)
 
         stderr_lines = []
         for line in iter(self.proc.stderr.readline, b""):
             decoded = line.decode(errors="replace")
             if stderr_marker in decoded:
                 break
-            stderr_lines.append(decoded)
+            if decoded.strip():  # Skip empty lines from REPL writer
+                stderr_lines.append(decoded)
 
         stdout = "".join(stdout_lines)
         stderr = "".join(stderr_lines)

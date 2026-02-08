@@ -9,27 +9,26 @@
 
 ## Current State
 
-**Phase 2a** (Complete)
-- `run(code, env)` tool interface
-- Project directory mounting (read-only)
-- Flake integration for custom environments
-- Dynamic tool description listing available environments
+**Phase 2b** (Complete)
+- Sessions with persistent Python/Bash/Node state
+- Length-prefixed JSON IPC protocol with sandbox agent
+- Session lifecycle management (idle timeout, max lifetime, reaper)
+- All Phase 2a features (run tool, project mounting, custom flakes)
 
 ## Planned Phases
 
-### Phase 2b: Session Persistence
+### Phase 2b: Session Persistence ✅
 
-**Goal**: Enable multi-turn workflows where state persists across `run()` calls.
+**Implemented**: IPC agent pattern with length-prefixed JSON protocol.
 
-**Approach**: IPC agent pattern
-- Long-running interpreter process inside jail
-- Unix socket communication from daemon
-- Session lifecycle management (idle timeout, cleanup)
-
-**Enables**:
-- Persistent Python/Node state (variables, imports)
-- Writable `/workspace` that persists within session
-- File retrieval from session workspace
+- Long-running interpreter process inside jail (`sandbox_agent.py`)
+- Stdin/stdout pipe transport from daemon (not Unix socket — simpler)
+- Per-session Mutex for arrival-order request serialization
+- Session lifecycle: idle timeout (300s), max lifetime (3600s), reaper (60s)
+- Python: shared namespace via `exec()`
+- Bash: persistent subprocess with nonce markers
+- Node: custom REPL (no prompt, no echo, let/const persistence)
+- Lazy interpreter instantiation within sessions
 
 **Plan**: `thoughts/shared/plans/2026-02-02-phase2b-sessions-spike.md`
 
