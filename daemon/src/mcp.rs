@@ -1,6 +1,8 @@
 //! MCP server implementation using rmcp.
 //!
 //! Exposes sandboxed execution environments as MCP tools.
+//! Routes to either ephemeral execution (`IsolationBackend`) or
+//! persistent sessions (`SessionManager`) based on the `session` parameter.
 
 use std::sync::Arc;
 
@@ -16,12 +18,14 @@ use tracing::{error, info};
 
 use crate::backend::IsolationBackend;
 use crate::config::Config;
+use crate::session::SessionManager;
 
 /// MCP server for sandboxed code execution.
 #[derive(Clone)]
 pub struct SandboxServer<B: Clone> {
     config: Arc<Config>,
     backend: Arc<B>,
+    session_manager: Arc<SessionManager>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -32,19 +36,48 @@ pub struct RunParams {
     #[schemars(description = "The code to run in the sandbox")]
     pub code: String,
 
-    /// The execution environment to use (e.g., "python", "shell", "node").
-    /// Required - choose based on what tools the code needs.
+    /// Execution environment (required): python, node, shell, or custom.
     #[schemars(description = "Execution environment (required): python, node, shell, or custom")]
     pub env: String,
+
+    /// Optional session ID for persistent state across calls.
+    /// When provided, interpreter state (variables, imports, files in /workspace)
+    /// persists between calls with the same session ID.
+    /// Sessions are bound to their creation environment.
+    #[serde(default)]
+    #[schemars(
+        description = "Optional session ID for persistent state across calls. When provided, variables and /workspace files persist between calls with the same session ID. Each session is bound to its creation environment."
+    )]
+    pub session: Option<String>,
+}
+
+/// Format an execution result into an MCP `CallToolResult`.
+fn format_result(exit_code: i32, stdout: String, stderr: String) -> CallToolResult {
+    let is_error = exit_code != 0;
+
+    let output = if stderr.is_empty() {
+        stdout
+    } else if stdout.is_empty() {
+        stderr
+    } else {
+        format!("{stdout}\n--- stderr ---\n{stderr}")
+    };
+
+    if is_error {
+        CallToolResult::error(vec![Content::text(output)])
+    } else {
+        CallToolResult::success(vec![Content::text(output)])
+    }
 }
 
 #[tool_router]
 impl<B: IsolationBackend + Clone + Send + Sync + 'static> SandboxServer<B> {
     /// Create a new sandbox server.
-    pub fn new(config: Config, backend: B) -> Self {
+    pub fn new(config: Config, backend: B, session_manager: Arc<SessionManager>) -> Self {
         Self {
             config: Arc::new(config),
             backend: Arc::new(backend),
+            session_manager,
             tool_router: Self::tool_router(),
         }
     }
@@ -67,35 +100,33 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> SandboxServer<B> {
             )
         })?;
 
-        info!(env = %env_name, code_len = code.len(), "Running code");
+        info!(
+            env = %env_name,
+            code_len = code.len(),
+            session = ?params.session,
+            "Running code"
+        );
 
-        // Execute in sandbox
-        match self.backend.execute(env_meta, code).await {
-            Ok(result) => {
-                let is_error = result.exit_code != 0;
+        // Dispatch: session → SessionManager, no session → ephemeral backend
+        let result = if let Some(ref session_id) = params.session {
+            self.session_manager
+                .execute(session_id, env_name, env_meta, code)
+                .await
+        } else {
+            self.backend.execute(env_meta, code).await
+        };
 
-                // Combine stdout/stderr
-                let output = if result.stderr.is_empty() {
-                    result.stdout
-                } else if result.stdout.is_empty() {
-                    result.stderr
-                } else {
-                    format!("{}\n--- stderr ---\n{}", result.stdout, result.stderr)
-                };
-
-                if is_error {
-                    Ok(CallToolResult::error(vec![Content::text(output)]))
-                } else {
-                    Ok(CallToolResult::success(vec![Content::text(output)]))
-                }
-            }
+        Ok(match result {
+            Ok(exec_result) => format_result(
+                exec_result.exit_code,
+                exec_result.stdout,
+                exec_result.stderr,
+            ),
             Err(e) => {
                 error!(error = %e, "Execution failed");
-                Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Execution error: {e}"
-                ))]))
+                CallToolResult::error(vec![Content::text(format!("Execution error: {e}"))])
             }
-        }
+        })
     }
 }
 
@@ -123,6 +154,13 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> ServerHandler for Sand
              - env: one of the available environments (required)\n\
              \n\
              Choose the environment based on what tools your code needs."
+        );
+
+        // Add session info
+        desc.push_str(
+            "\n\nFor persistent state across calls, pass a `session` ID. \
+             Variables, imports, and /workspace files persist within a session. \
+             Each session is bound to its creation environment.",
         );
 
         // Add project info if configured
@@ -153,11 +191,17 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> ServerHandler for Sand
 }
 
 /// Serve the sandbox server over stdio.
+///
+/// Starts the session reaper, serves MCP, then cleans up all sessions on disconnect.
 pub async fn serve_stdio<B: IsolationBackend + Clone + Send + Sync + 'static>(
     config: Config,
     backend: B,
+    session_manager: Arc<SessionManager>,
 ) -> anyhow::Result<()> {
-    let server = SandboxServer::new(config, backend);
+    // Start background reaper
+    let reaper_handle = session_manager.start_reaper();
+
+    let server = SandboxServer::new(config, backend, Arc::clone(&session_manager));
 
     info!("Starting MCP server on stdio");
 
@@ -171,6 +215,11 @@ pub async fn serve_stdio<B: IsolationBackend + Clone + Send + Sync + 'static>(
         .await
         .map_err(|e| anyhow::anyhow!("MCP server error: {e}"))?;
 
+    // MCP client disconnected — clean up
+    info!("MCP client disconnected, cleaning up sessions");
+    reaper_handle.abort();
+    session_manager.destroy_all().await;
+
     Ok(())
 }
 
@@ -179,6 +228,7 @@ mod tests {
     use super::*;
     use crate::backend::ExecutionResult;
     use crate::config::{BackendType, EnvironmentMeta};
+    use crate::session::SessionConfig;
     use async_trait::async_trait;
     use std::collections::HashMap;
 
@@ -207,6 +257,7 @@ mod tests {
             EnvironmentMeta {
                 backend: BackendType::Jail,
                 exec: "/bin/test".to_string(),
+                session_exec: None,
                 timeout_seconds: 30,
                 memory_mb: 512,
             },
@@ -214,15 +265,21 @@ mod tests {
         Config {
             environments,
             project: None,
+            session: None,
         }
+    }
+
+    fn test_session_manager() -> Arc<SessionManager> {
+        Arc::new(SessionManager::new(SessionConfig::default()))
     }
 
     #[tokio::test]
     async fn test_run_success() {
-        let server = SandboxServer::new(test_config(), MockBackend);
+        let server = SandboxServer::new(test_config(), MockBackend, test_session_manager());
         let params = Parameters(RunParams {
             code: "echo hello".to_string(),
             env: "test".to_string(),
+            session: None,
         });
 
         let result = server.run(params).await.unwrap();
@@ -231,13 +288,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_unknown_env() {
-        let server = SandboxServer::new(test_config(), MockBackend);
+        let server = SandboxServer::new(test_config(), MockBackend, test_session_manager());
         let params = Parameters(RunParams {
             code: "echo hello".to_string(),
             env: "unknown".to_string(),
+            session: None,
         });
 
         let result = server.run(params).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_session_without_session_exec() {
+        let server = SandboxServer::new(test_config(), MockBackend, test_session_manager());
+        let params = Parameters(RunParams {
+            code: "x = 42".to_string(),
+            env: "test".to_string(),
+            session: Some("mysession".to_string()),
+        });
+
+        // Should fail because test env has no session_exec
+        let result = server.run(params).await.unwrap();
+        assert!(result.is_error.unwrap_or(false));
     }
 }

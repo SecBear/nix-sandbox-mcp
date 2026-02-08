@@ -1,5 +1,5 @@
 # Parse TOML config and build sandboxed environments
-{ pkgs, jail, presets }:
+{ pkgs, jail, presets, agentPkg ? null }:
 
 configPath:
 
@@ -8,7 +8,7 @@ let
   config = builtins.fromTOML (builtins.readFile configPath);
 
   # Create backends (jail backend uses the passed jail function)
-  backends = import ../backends { inherit pkgs jail; };
+  backends = import ../backends { inherit pkgs jail agentPkg; };
 
   # Use jail backend for MVP
   jailBackend = backends.jail;
@@ -135,17 +135,28 @@ let
         stdinMode = interpreterConfig.stdinMode;
       };
 
+      # Build session variant (if agent is available)
+      sessionJailedEnv = if agentPkg != null then
+        jailBackend.mkSessionJailedEnv {
+          inherit name projectPath projectMount;
+          env = baseEnv;
+        }
+      else null;
+
       # Extract config values with defaults
       timeout = envConfig.timeout_seconds or config.defaults.timeout_seconds or 30;
       memory = envConfig.memory_mb or config.defaults.memory_mb or 512;
     in {
       drv = jailedEnv;
+      sessionDrv = sessionJailedEnv;
       meta = {
         backend = "jail";
         exec = "${jailedEnv}/bin/run";
         timeout_seconds = timeout;
         memory_mb = memory;
-      };
+      } // (if sessionJailedEnv != null then {
+        session_exec = "${sessionJailedEnv}/bin/run";
+      } else {});
     };
 
   # Build all environments from explicit config
@@ -201,15 +212,26 @@ let
         # Config values with defaults
         timeout = config.defaults.timeout_seconds or 30;
         memory = config.defaults.memory_mb or 512;
+        # Build session variant for project env (if agent available)
+        sessionJailedEnv = if agentPkg != null then
+          jailBackend.mkSessionJailedEnv {
+            name = "project";
+            env = env;
+            inherit projectPath projectMount;
+          }
+        else null;
       in {
         project = {
           drv = jailedEnv;
+          sessionDrv = sessionJailedEnv;
           meta = {
             backend = "jail";
             exec = "${jailedEnv}/bin/run";
             timeout_seconds = timeout;
             memory_mb = memory;
-          };
+          } // (if sessionJailedEnv != null then {
+            session_exec = "${sessionJailedEnv}/bin/run";
+          } else {});
         };
       }
     else {};
@@ -217,8 +239,11 @@ let
   # Merge explicit environments with project environment
   environments = explicitEnvironments // projectEnvironment;
 
-  # Collect all derivations (for runtimeInputs)
-  drvs = builtins.attrValues (builtins.mapAttrs (_: e: e.drv) environments);
+  # Collect all derivations (for runtimeInputs) — includes both ephemeral and session wrappers
+  ephemeralDrvs = builtins.attrValues (builtins.mapAttrs (_: e: e.drv) environments);
+  sessionDrvs = builtins.filter (d: d != null)
+    (builtins.attrValues (builtins.mapAttrs (_: e: e.sessionDrv or null) environments));
+  drvs = ephemeralDrvs ++ sessionDrvs;
 
   # Generate environment metadata (exec paths, timeouts, etc.)
   envMetadata = builtins.mapAttrs (_: e: e.meta) environments;
@@ -232,11 +257,18 @@ let
     inherit_env = config.project.inherit_env or { vars = []; };
   } else null;
 
+  # Session config for daemon (if configured)
+  sessionConfig = if config ? session then {
+    idle_timeout_seconds = config.session.idle_timeout_seconds or 300;
+    max_lifetime_seconds = config.session.max_lifetime_seconds or 3600;
+  } else null;
+
   # Full metadata structure expected by daemon
-  # Shape: { environments: {...}, project?: {...} }
+  # Shape: { environments: {...}, project?: {...}, session?: {...} }
   fullMetadata = {
     environments = envMetadata;
-  } // (if projectConfig != null then { project = projectConfig; } else {});
+  } // (if projectConfig != null then { project = projectConfig; } else {})
+    // (if sessionConfig != null then { session = sessionConfig; } else {});
 
   metadataJson = builtins.toJSON fullMetadata;
 

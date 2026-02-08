@@ -18,6 +18,22 @@ pub struct Config {
     /// Project configuration (optional).
     #[serde(default)]
     pub project: Option<ProjectConfig>,
+
+    /// Session persistence configuration (optional).
+    #[serde(default)]
+    pub session: Option<SessionConfigToml>,
+}
+
+/// Session persistence configuration (as read from TOML/JSON).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionConfigToml {
+    /// Idle timeout in seconds before a session is reaped.
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout_seconds: u64,
+
+    /// Maximum session lifetime in seconds, regardless of activity.
+    #[serde(default = "default_max_lifetime")]
+    pub max_lifetime_seconds: u64,
 }
 
 /// Project directory configuration.
@@ -84,9 +100,14 @@ pub struct EnvironmentMeta {
     /// Which backend to use ("jail" or "microvm").
     pub backend: BackendType,
 
-    /// Path to the executable that runs code in this environment.
+    /// Path to the executable that runs code in this environment (ephemeral).
     /// For jail backend, this is the jail wrapper script.
     pub exec: String,
+
+    /// Path to the session jail wrapper (runs the persistent agent).
+    /// If absent, sessions are not supported for this environment.
+    #[serde(default)]
+    pub session_exec: Option<String>,
 
     /// Maximum execution time in seconds.
     #[serde(default = "default_timeout")]
@@ -114,6 +135,14 @@ const fn default_timeout() -> u64 {
 
 const fn default_memory() -> u64 {
     512
+}
+
+const fn default_idle_timeout() -> u64 {
+    300
+}
+
+const fn default_max_lifetime() -> u64 {
+    3600
 }
 
 #[cfg(test)]

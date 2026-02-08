@@ -1,5 +1,5 @@
 # jail.nix backend - wraps environments in bubblewrap sandboxes
-{ pkgs, jail }:
+{ pkgs, jail, agentPkg ? null }:
 
 rec {
   # Create a jailed wrapper for an environment
@@ -112,4 +112,39 @@ rec {
     interpreter = "node -e";
     stdinMode = "arg";
   };
+
+  # Create a session-enabled jailed wrapper for an environment.
+  # Reuses mkJailedEnv with the sandbox agent as the interpreter.
+  # The agent runs as a long-lived process, maintaining interpreter
+  # state across executions via length-prefixed JSON on stdin/stdout.
+  #
+  # Arguments:
+  #   name: Environment name (e.g., "python")
+  #   env: The environment package (from nix/environments/)
+  #   projectPath: Optional path to mount as project directory
+  #   projectMount: Mount point for project inside sandbox
+  mkSessionJailedEnv = {
+    name,
+    env,
+    projectPath ? null,
+    projectMount ? "/project",
+  }:
+    assert agentPkg != null;
+    let
+      # Merge the original env with the agent and python3 (agent runtime)
+      sessionEnv = pkgs.buildEnv {
+        name = "session-env-${name}";
+        paths = [
+          env
+          agentPkg
+          pkgs.python3
+        ];
+      };
+    in mkJailedEnv {
+      name = "session-${name}";
+      env = sessionEnv;
+      interpreter = "sandbox-agent";
+      stdinMode = "pipe";
+      inherit projectPath projectMount;
+    };
 }

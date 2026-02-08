@@ -53,6 +53,8 @@
 
           presets = if isLinux then import ./nix/environments { inherit pkgs; } else { };
 
+          agentPkg = if isLinux then import ./agent { inherit pkgs; } else null;
+
           daemon = pkgs.rustPlatform.buildRustPackage {
             pname = "nix-sandbox-mcp-daemon";
             version = "0.1.0";
@@ -64,7 +66,7 @@
             configPath:
             let
               built = import ./nix/lib/fromToml.nix {
-                inherit pkgs jail presets;
+                inherit pkgs jail presets agentPkg;
               } configPath;
             in
             pkgs.writeShellApplication {
@@ -101,17 +103,17 @@
           debug = pkgs.lib.optionalAttrs isLinux {
             # Raw TOML parsing result
             fromToml = import ./nix/lib/fromToml.nix {
-              inherit pkgs jail presets;
+              inherit pkgs jail presets agentPkg;
             } ./config.example.toml;
 
             # Just the metadata
             metadata = (import ./nix/lib/fromToml.nix {
-              inherit pkgs jail presets;
+              inherit pkgs jail presets agentPkg;
             } ./config.example.toml).metadata;
 
             # Individual environments
             environments = (import ./nix/lib/fromToml.nix {
-              inherit pkgs jail presets;
+              inherit pkgs jail presets agentPkg;
             } ./config.example.toml).environments;
 
             # Presets

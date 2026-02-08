@@ -7,6 +7,7 @@ pkgs.testers.nixosTest {
   nodes.machine = { pkgs, ... }: {
     environment.systemPackages = [
       mcpServer
+      pkgs.python3
     ];
 
     # Ensure user namespaces work (required for bubblewrap)
@@ -77,5 +78,140 @@ with subtest("Exception returns error"):
 with subtest("Empty command returns success"):
     result = mcp_call('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"env":"python","code":""}}}')
     assert '"isError":true' not in result, f"Empty command should not error: {result}"
+
+
+# ─────────────────────────────────────────────────────────────────
+# Session persistence tests
+# ─────────────────────────────────────────────────────────────────
+
+import json
+
+# Deploy request-response helper script into the VM.
+# This does proper sequential MCP communication: send request, readline()
+# for response, send next. No sleep delays, no out-of-order races.
+machine.succeed("""cat > /tmp/mcp_session.py <<'PYEOF'
+import subprocess, json, sys
+
+calls = json.loads(sys.stdin.read())
+proc = subprocess.Popen(
+    ['nix-sandbox-mcp', '--stdio'],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+)
+
+def send(msg):
+    proc.stdin.write((json.dumps(msg) + chr(10)).encode())
+    proc.stdin.flush()
+
+def recv():
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            return None
+        try:
+            return json.loads(line.decode())
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+# MCP handshake
+send({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}})
+recv()
+send({"jsonrpc":"2.0","method":"notifications/initialized"})
+
+# Sequential tool calls: send request, wait for response, repeat
+results = {}
+for i, call in enumerate(calls, start=2):
+    send({"jsonrpc":"2.0","id":i,"method":"tools/call","params":{"name":"run","arguments":call}})
+    resp = recv()
+    if resp and "id" in resp:
+        results[str(resp["id"])] = json.dumps(resp)
+
+proc.stdin.close()
+try:
+    proc.wait(timeout=10)
+except Exception:
+    proc.kill()
+
+print(json.dumps(results))
+PYEOF
+""")
+
+def mcp_session(*tool_calls) -> dict:
+    """Send tool calls sequentially with proper request-response sync.
+
+    Uses a helper script that manages a subprocess: send one request,
+    readline() the response, send next. This mirrors real MCP client
+    behavior — zero delays, deterministic ordering.
+
+    Returns dict mapping JSON-RPC id (int) to response JSON string.
+    Tool call ids start at 2 (id 1 is the initialize handshake).
+    """
+    calls_json = json.dumps(list(tool_calls))
+    # Write calls to file to avoid shell quoting issues
+    machine.succeed(f"""
+        cat > /tmp/mcp_calls.json <<'JSONEOF'
+{calls_json}
+JSONEOF
+    """)
+    raw = machine.succeed("python3 /tmp/mcp_session.py < /tmp/mcp_calls.json")
+    # Convert string keys back to ints for clean test assertions
+    parsed = json.loads(raw.strip())
+    return {int(k): v for k, v in parsed.items()}
+
+
+# Test 10: Python state persists across session calls
+with subtest("Session state persists - Python"):
+    resps = mcp_session(
+        {"env": "python", "code": "x = 42", "session": "pytest1"},
+        {"env": "python", "code": "print(x)", "session": "pytest1"},
+    )
+    # id:3 is print(x) — match by id, not response order
+    assert "42" in resps.get(3, ""), f"Expected '42' from session state: {resps}"
+
+
+# Test 11: Different sessions are isolated
+with subtest("Different sessions are isolated"):
+    resps = mcp_session(
+        {"env": "python", "code": "y = 99", "session": "iso_a"},
+        {"env": "python", "code": "print(y)", "session": "iso_a"},
+        {"env": "python", "code": "print(y)", "session": "iso_b"},
+    )
+    # id:3 (iso_a print) should have 99, id:4 (iso_b print) should have NameError
+    assert "99" in resps.get(3, ""), f"Expected '99' from iso_a: {resps}"
+    assert "NameError" in resps.get(4, ""), f"Expected NameError from iso_b: {resps}"
+
+
+# Test 12: Shell env vars persist in session
+with subtest("Shell session persists env vars"):
+    resps = mcp_session(
+        {"env": "shell", "code": "export MY_VAR=hello_sessions", "session": "shtest1"},
+        {"env": "shell", "code": "echo $MY_VAR", "session": "shtest1"},
+    )
+    assert "hello_sessions" in resps.get(3, ""), f"Expected 'hello_sessions': {resps}"
+
+
+# Test 13: /workspace files persist within session
+with subtest("Workspace files persist in session"):
+    resps = mcp_session(
+        {"env": "python", "code": "open('/workspace/test.txt', 'w').write('persisted')", "session": "wstest"},
+        {"env": "python", "code": "print(open('/workspace/test.txt').read())", "session": "wstest"},
+    )
+    assert "persisted" in resps.get(3, ""), f"Expected 'persisted': {resps}"
+
+
+# Test 14: Ephemeral execution still works without session param
+with subtest("Ephemeral execution without session"):
+    result = mcp_call('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"env":"python","code":"print(123)"}}}')
+    assert "123" in result, f"Expected '123' from ephemeral execution: {result}"
+
+
+# Test 15: Env mismatch returns clear error
+with subtest("Session env mismatch returns error"):
+    resps = mcp_session(
+        {"env": "python", "code": "x = 1", "session": "envmix"},
+        {"env": "shell", "code": "echo hi", "session": "envmix"},
+    )
+    # id:3 (shell on python-bound session) should get env mismatch error
+    r3 = resps.get(3, "")
+    assert "bound to environment" in r3 or "not" in r3, f"Expected env mismatch error: {resps}"
   '';
 }

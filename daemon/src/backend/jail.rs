@@ -85,6 +85,7 @@ mod tests {
         let env = EnvironmentMeta {
             backend: BackendType::Jail,
             exec: "/bin/sh".to_string(), // Use sh for testing without jail
+            session_exec: None,
             timeout_seconds: 5,
             memory_mb: 512,
         };

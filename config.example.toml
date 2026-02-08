@@ -71,6 +71,18 @@ preset = "node"
 # memory_mb = 1024
 
 # ─────────────────────────────────────────────────────────────────
+# Session Persistence (Optional)
+#
+# Enable persistent state across run() calls using the `session` parameter.
+# Variables, imports, and /workspace files persist within a session.
+# ─────────────────────────────────────────────────────────────────
+
+[session]
+idle_timeout_seconds = 300   # Reap sessions idle for this long (default: 300s / 5min)
+max_lifetime_seconds = 3600  # Maximum session lifetime regardless of activity (default: 3600s / 1hr)
+# Note: Reaper runs every 60s, so actual precision is ±60s
+
+# ─────────────────────────────────────────────────────────────────
 # Backend Configuration
 # ─────────────────────────────────────────────────────────────────
 
