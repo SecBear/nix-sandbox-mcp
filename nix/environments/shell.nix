@@ -10,5 +10,10 @@ pkgs.buildEnv {
     gnugrep
     gawk
     findutils
+    jq
+    tree
+    diffutils
+    file
+    bc
   ];
 }

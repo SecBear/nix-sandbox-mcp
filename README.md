@@ -108,9 +108,9 @@ Three presets cover common use cases:
 
 | Preset | Description | Packages |
 |--------|-------------|----------|
-| `shell` | Minimal Linux environment | coreutils, bash, grep, sed, awk, jq, curl |
-| `python` | Python 3 with standard library | python3 |
-| `node` | Node.js runtime | nodejs_22 |
+| `shell` | Minimal Linux environment | bash, coreutils, grep, sed, awk, findutils, jq, tree, diffutils, file, bc |
+| `python` | Python 3 with PyYAML | python3 (+pyyaml), coreutils |
+| `node` | Node.js runtime | nodejs, coreutils |
 
 Presets use the jail backend by default. Override with `backend = "microvm"` for stronger isolation.
 

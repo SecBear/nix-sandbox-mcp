@@ -4,7 +4,7 @@
 pkgs.buildEnv {
   name = "sandbox-env-python";
   paths = with pkgs; [
-    python3
+    (python3.withPackages (ps: [ ps.pyyaml ]))
     coreutils
   ];
 }

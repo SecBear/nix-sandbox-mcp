@@ -137,8 +137,9 @@ rec {
         paths = [
           env
           agentPkg
-          pkgs.python3
+          pkgs.python3  # Agent runtime (may overlap with python preset)
         ];
+        ignoreCollisions = true;
       };
     in mkJailedEnv {
       name = "session-${name}";
