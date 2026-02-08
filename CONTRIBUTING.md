@@ -55,7 +55,7 @@ nix-sandbox-mcp/
 │   │   └── default.nix
 │   ├── backends/
 │   │   ├── jail.nix                  # jail.nix backend (mkJailedEnv + mkSessionJailedEnv)
-│   │   └── microvm.nix              # microvm.nix backend (future)
+│   │   └── microvm.nix              # microvm.nix backend (planned)
 │   └── lib/
 │       ├── mkEnvironment.nix         # env def + backend -> built artifact
 │       ├── fromToml.nix              # Parse TOML config, build all envs

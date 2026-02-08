@@ -16,6 +16,9 @@ thoughts/
 .claude/
 .mcp.json
 
+# Dev scripts
+test-local.sh
+
 # IDE
 .idea/
 .vscode/

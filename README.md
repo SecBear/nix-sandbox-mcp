@@ -88,19 +88,15 @@ preset = "node"
 # flake = "github:myorg/dev-envs#default"
 ```
 
-Use with your config:
+Add custom environments by referencing any Nix flake in your config:
 
-```nix
-# your-flake/flake.nix
-{
-  inputs.nix-sandbox-mcp.url = "github:secbear/nix-sandbox-mcp";
-
-  outputs = { nix-sandbox-mcp, ... }: {
-    packages.x86_64-linux.mcp-server = 
-      nix-sandbox-mcp.lib.mkServer ./config.toml;
-  };
-}
+```toml
+[environments.data-science]
+flake = "github:myorg/envs#data-science"
+interpreter = "python3 -c"
 ```
+
+See [Custom Environments](#custom-environments) below for a full walkthrough.
 
 ## Bundled Presets
 
@@ -201,7 +197,7 @@ nix-sandbox-mcp/
 │   │
 │   ├── backends/
 │   │   ├── jail.nix               # jail.nix backend integration
-│   │   └── microvm.nix            # microvm.nix backend (future)
+│   │   └── microvm.nix            # microvm.nix backend (planned)
 │   │
 │   └── lib/
 │       ├── mkEnvironment.nix      # env def + backend → built artifact
@@ -250,21 +246,26 @@ nix-sandbox-mcp/
 - [ ] Hardware-level isolation for untrusted code
 - [ ] virtiofs for /nix/store sharing
 
-## Environment Flake Contract
+## Custom Environments
 
-When referencing external flakes, they should export a package:
+You can add custom environments by referencing any Nix flake in `config.toml`. This lets you define sandboxes with exactly the packages you need.
+
+### Step 1: Create a flake that exports a package
+
+The flake should export a `buildEnv` with the packages you want available in the sandbox:
 
 ```nix
-# github:myorg/envs/flake.nix
+# my-envs/flake.nix
 {
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
   outputs = { nixpkgs, ... }:
     let pkgs = nixpkgs.legacyPackages.x86_64-linux;
     in {
       packages.x86_64-linux.default = pkgs.buildEnv {
-        name = "my-env";
+        name = "data-science";
         paths = [
-          pkgs.python311
-          (pkgs.python311.withPackages (ps: [ ps.requests ps.numpy ]))
+          (pkgs.python3.withPackages (ps: [ ps.numpy ps.pandas ps.requests ]))
           pkgs.jq
           pkgs.ripgrep
         ];
@@ -273,7 +274,31 @@ When referencing external flakes, they should export a package:
 }
 ```
 
-The flake output is wrapped by the chosen backend (jail.nix or microvm.nix) automatically.
+### Step 2: Reference it in your config
+
+```toml
+[environments.data-science]
+flake = "github:myorg/my-envs#default"   # or a local path: "path:./my-envs"
+interpreter = "python3 -c"               # how to run code in this env
+```
+
+### Step 3: Rebuild
+
+```bash
+nix build
+```
+
+The flake output is wrapped by the chosen backend (jail.nix) automatically — your packages end up in an isolated sandbox with no network access and a read-only filesystem.
+
+### Quick single-package environments
+
+For simple cases, reference packages directly from nixpkgs:
+
+```toml
+[environments.jq-shell]
+flake = "nixpkgs#jq"
+interpreter = "bash -s"
+```
 
 ## Security Model
 

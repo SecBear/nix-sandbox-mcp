@@ -36,15 +36,15 @@ mount_point = "/project" # Where to mount inside sandbox (default: /project)
 
 [environments.shell]
 preset = "shell"
-# Minimal Linux shell: coreutils, bash, grep, sed, awk, jq, curl
+# bash, coreutils, grep, sed, awk, findutils, jq, tree, diffutils, file, bc
 
 [environments.python]
 preset = "python"
-# Python 3 with standard library
+# python3 (+pyyaml), coreutils
 
 [environments.node]
 preset = "node"
-# Node.js 22 runtime
+# nodejs, coreutils
 
 # ─────────────────────────────────────────────────────────────────
 # Custom environments (examples - uncomment to use)

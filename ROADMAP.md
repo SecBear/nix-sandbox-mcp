@@ -15,7 +15,7 @@
 - Session lifecycle management (idle timeout, max lifetime, reaper)
 - All Phase 2a features (run tool, project mounting, custom flakes)
 
-## Planned Phases
+## Completed Phases
 
 ### Phase 2b: Session Persistence ✅
 
@@ -30,7 +30,7 @@
 - Node: custom REPL (no prompt, no echo, let/const persistence)
 - Lazy interpreter instantiation within sessions
 
-**Plan**: `thoughts/shared/plans/2026-02-02-phase2b-sessions-spike.md`
+## Planned Phases
 
 ### Phase 2c: Decoupled Sandbox Architecture
 
@@ -58,8 +58,6 @@ preset = "python"
 [environments.python-data]
 sandbox = "/nix/store/xxx-python-data"
 ```
-
-**Plan**: `thoughts/shared/plans/2026-02-03-phase2c-decoupled-sandboxes.md`
 
 ### Phase 3: microVM Backend
 
@@ -138,10 +136,3 @@ Exposing detailed metadata (packages, limits, capabilities) to Claude.
 
 **Principle**: Operator configures complexity, Claude sees simplicity.
 
-## References
-
-- Phase 1 plan: `thoughts/shared/plans/2026-02-01-phase1-mvp-nix-layer.md`
-- Phase 2a plan: `thoughts/shared/plans/2026-02-02-phase2a-run-tool-and-project-context.md`
-- Phase 2b plan: `thoughts/shared/plans/2026-02-02-phase2b-sessions-spike.md`
-- Phase 2c plan: `thoughts/shared/plans/2026-02-03-phase2c-decoupled-sandboxes.md`
-- Claude's ideal sandbox feedback: See git history for context

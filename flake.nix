@@ -159,11 +159,6 @@
           };
         };
 
-      flake = {
-        lib = {
-          # Expose mkServer for users to build custom configurations
-          # Usage: nix-sandbox-mcp.lib.mkServer ./my-config.toml
-        };
-      };
+      flake = { };
     };
 }
