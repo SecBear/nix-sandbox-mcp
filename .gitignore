@@ -8,6 +8,14 @@ result-*
 # Rust
 daemon/target/
 
+# Python
+__pycache__/
+
+# AI / session artifacts
+thoughts/
+.claude/
+.mcp.json
+
 # IDE
 .idea/
 .vscode/
