@@ -115,15 +115,6 @@ impl Session {
         Ok(resp)
     }
 
-    /// Check if the agent process is still alive.
-    #[allow(dead_code)]
-    fn is_alive(&self) -> bool {
-        // We can't lock synchronously in an async context easily.
-        // The transport's is_alive is atomic, so we check it directly
-        // via a best-effort approach. The reaper will catch dead sessions.
-        true // Checked properly during request/reaper
-    }
-
     /// Shut down the agent.
     async fn shutdown(&self) -> Result<()> {
         let transport = self.transport.lock().await;
@@ -315,7 +306,7 @@ impl SessionManager {
 
     /// Clean up expired sessions (called by the reaper task).
     pub async fn cleanup_expired(&self) {
-        let expired_ids: Vec<String> = {
+        let expired_sessions: Vec<Arc<Session>> = {
             let sessions = self.sessions.read().await;
             let mut expired = Vec::new();
             for (id, session) in sessions.iter() {
@@ -330,25 +321,31 @@ impl SessionManager {
                         "idle timeout"
                     };
                     debug!(session = %id, reason = %reason, "Session expired");
-                    expired.push(id.clone());
+                    expired.push(Arc::clone(session));
                 }
             }
             expired
         };
 
-        if expired_ids.is_empty() {
+        if expired_sessions.is_empty() {
             return;
         }
 
-        let mut sessions = self.sessions.write().await;
-        let mut locks = self.execute_locks.write().await;
-        for id in &expired_ids {
-            if let Some(session) = sessions.remove(id) {
-                locks.remove(id);
-                info!(session = %id, "Cleaning up expired session");
-                if let Err(e) = session.shutdown().await {
-                    warn!(session = %id, error = %e, "Error shutting down session");
-                }
+        // Remove from maps while holding locks, then drop locks before shutdown
+        {
+            let mut sessions = self.sessions.write().await;
+            let mut locks = self.execute_locks.write().await;
+            for session in &expired_sessions {
+                sessions.remove(&session.id);
+                locks.remove(&session.id);
+            }
+        }
+
+        // Shutdown outside of locks — async I/O won't block other session operations
+        for session in &expired_sessions {
+            info!(session = %session.id, "Cleaning up expired session");
+            if let Err(e) = session.shutdown().await {
+                warn!(session = %session.id, error = %e, "Error shutting down session");
             }
         }
     }

@@ -42,12 +42,17 @@ def send_message(msg: dict) -> None:
     REAL_STDOUT.flush()
 
 
+MAX_MESSAGE_SIZE = 64 * 1024 * 1024  # 64 MB, matches Rust transport limit
+
+
 def recv_message() -> dict:
     """Read a length-prefixed JSON message from real stdin."""
     raw_len = REAL_STDIN.read(4)
     if len(raw_len) < 4:
         raise EOFError("stdin closed")
     (length,) = struct.unpack(">I", raw_len)
+    if length > MAX_MESSAGE_SIZE:
+        raise ValueError(f"message too large: {length} bytes (max {MAX_MESSAGE_SIZE})")
     payload = REAL_STDIN.read(length)
     if len(payload) < length:
         raise EOFError("incomplete message")
@@ -132,7 +137,7 @@ class BashInterpreter:
                     try:
                         exit_code = int(parts[-1])
                     except ValueError:
-                        pass
+                        exit_code = 1
                 break
             stdout_lines.append(decoded)
         else:
@@ -265,15 +270,9 @@ def dispatch_execute(interpreters: dict, interpreter_name: str, code: str) -> di
     # if valid, and not created, call the constructor
     if interpreter_name not in interpreters:
         interpreters[interpreter_name] = INTERPRETER_CLASSES[interpreter_name]()
-    
-    # call execute
-    # return dict with results
-    return dict(
-        zip(
-            ["stdout", "stderr", "exit_code"],
-            interpreters[interpreter_name].execute(code),
-        )
-    )
+
+    stdout, stderr, exit_code = interpreters[interpreter_name].execute(code)
+    return {"stdout": stdout, "stderr": stderr, "exit_code": exit_code}
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -292,6 +291,9 @@ def main():
             msg = recv_message()
         except EOFError:
             break
+        except (json.JSONDecodeError, ValueError) as e:
+            send_message({"type": "error", "message": f"Bad message: {e}"})
+            continue
 
         msg_type = msg.get("type")
 
