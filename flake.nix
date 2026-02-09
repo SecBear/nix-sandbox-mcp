@@ -74,6 +74,35 @@
               runtimeInputs = [ daemon ] ++ built.drvs;
               text = ''
                 export NIX_SANDBOX_METADATA='${built.metadataJson}'
+
+                # Build custom environments from flake refs (if specified)
+                if [ -n "''${NIX_SANDBOX_ENVS:-}" ]; then
+                  SANDBOX_TMPDIR=$(mktemp -d)
+
+                  # Merge in existing sandbox dir
+                  _DEFAULT_DIR="''${NIX_SANDBOX_DIR:-''${HOME}/.config/nix-sandbox-mcp/sandboxes}"
+                  if [ -d "$_DEFAULT_DIR" ]; then
+                    for entry in "$_DEFAULT_DIR"/*/; do
+                      [ -d "$entry" ] && ln -s "$(readlink -f "$entry")" "$SANDBOX_TMPDIR/$(basename "$entry")" 2>/dev/null || true
+                    done
+                  fi
+
+                  # Build each flake ref
+                  j=0
+                  for flakeref in $(echo "''${NIX_SANDBOX_ENVS}" | tr ',' '\n'); do
+                    flakeref=$(echo "$flakeref" | xargs)
+                    [ -z "$flakeref" ] && continue
+                    echo "nix-sandbox-mcp: building $flakeref..." >&2
+                    if nix build "$flakeref" -o "$SANDBOX_TMPDIR/env-$j"; then
+                      j=$((j + 1))
+                    else
+                      echo "nix-sandbox-mcp: warning: failed to build $flakeref" >&2
+                    fi
+                  done
+
+                  export NIX_SANDBOX_DIR="$SANDBOX_TMPDIR"
+                fi
+
                 exec nix-sandbox-mcp-daemon "$@"
               '';
             };

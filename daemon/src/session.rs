@@ -55,6 +55,25 @@ impl SessionConfig {
             ..Self::default()
         }
     }
+
+    /// Create from environment variables, falling back to defaults.
+    ///
+    /// Reads `SESSION_IDLE_TIMEOUT` and `SESSION_MAX_LIFETIME` (in seconds).
+    pub fn from_env() -> Self {
+        Self {
+            idle_timeout: std::env::var("SESSION_IDLE_TIMEOUT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(300)),
+            max_lifetime: std::env::var("SESSION_MAX_LIFETIME")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(3600)),
+            ..Self::default()
+        }
+    }
 }
 
 /// A persistent sandbox session.
@@ -422,6 +441,16 @@ mod tests {
     #[test]
     fn test_session_config_defaults() {
         let config = SessionConfig::default();
+        assert_eq!(config.idle_timeout, Duration::from_secs(300));
+        assert_eq!(config.max_lifetime, Duration::from_secs(3600));
+        assert_eq!(config.agent_ready_timeout, Duration::from_secs(30));
+        assert_eq!(config.reaper_interval, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_session_config_from_env_defaults() {
+        // When env vars are not set, from_env() uses the same defaults
+        let config = SessionConfig::from_env();
         assert_eq!(config.idle_timeout, Duration::from_secs(300));
         assert_eq!(config.max_lifetime, Duration::from_secs(3600));
         assert_eq!(config.agent_ready_timeout, Duration::from_secs(30));

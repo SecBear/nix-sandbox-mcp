@@ -1,31 +1,12 @@
 # nix-sandbox-mcp configuration
 #
-# This file defines which environments are available and how they're sandboxed.
-
-[daemon]
-transport = "stdio"
-log_level = "info"
+# Environment definitions (build-time). Runtime settings (project mounting,
+# session timeouts) are configured via env vars in your MCP client config.
+# See README.md for details.
 
 [defaults]
-backend = "jail"          # "jail" (fast, namespace isolation) or "microvm" (secure, VM isolation)
 timeout_seconds = 30      # Maximum execution time per invocation
 memory_mb = 512           # Memory limit for sandbox
-
-# ─────────────────────────────────────────────────────────────────
-# Project Configuration (Optional)
-#
-# Mount a project directory into all sandbox environments.
-# This allows code to access project files (e.g., run tests, read configs).
-# ─────────────────────────────────────────────────────────────────
-
-[project]
-path = "."               # Project directory (default: current directory)
-mount_point = "/project" # Where to mount inside sandbox (default: /project)
-# Note: Project is always mounted read-only. Use Claude's Edit tool for modifications.
-# use_flake = true       # Create "project" env from project's devShell (requires flake.nix)
-#
-# [project.inherit_env]
-# vars = ["DATABASE_URL", "RUST_LOG"]  # Host env vars to pass into sandbox
 
 # ─────────────────────────────────────────────────────────────────
 # Environments
@@ -47,7 +28,7 @@ preset = "node"
 # nodejs, coreutils
 
 # ─────────────────────────────────────────────────────────────────
-# Custom environments (examples - uncomment to use)
+# Custom environments (examples — uncomment to use)
 # ─────────────────────────────────────────────────────────────────
 
 # Custom flake with explicit interpreter
@@ -64,31 +45,10 @@ preset = "node"
 # [environments.dev]
 # flake = "github:myorg/dev-envs#default"
 
-# Use microVM for untrusted code (Phase 3)
-# [environments.untrusted]
-# flake = "github:someone/env#thing"
-# backend = "microvm"
-# memory_mb = 1024
-
 # ─────────────────────────────────────────────────────────────────
-# Session Persistence (Optional)
-#
-# Enable persistent state across run() calls using the `session` parameter.
-# Variables, imports, and /workspace files persist within a session.
+# Advanced: create a "project" env from your project's devShell
+# Requires nix build (the project flake is evaluated at build time)
 # ─────────────────────────────────────────────────────────────────
-
-[session]
-idle_timeout_seconds = 300   # Reap sessions idle for this long (default: 300s / 5min)
-max_lifetime_seconds = 3600  # Maximum session lifetime regardless of activity (default: 3600s / 1hr)
-# Note: Reaper runs every 60s, so actual precision is ±60s
-
-# ─────────────────────────────────────────────────────────────────
-# Backend Configuration
-# ─────────────────────────────────────────────────────────────────
-
-[backends.jail]
-# jail.nix (bubblewrap) settings
-# Default combinators provide: tmpfs home, no network, isolated namespaces
-
-[backends.microvm]
-hypervisor = "cloud-hypervisor"  # "cloud-hypervisor" | "qemu" | "firecracker"
+# [project]
+# path = "."
+# use_flake = true

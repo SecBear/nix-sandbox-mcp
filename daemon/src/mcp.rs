@@ -176,16 +176,12 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> ServerHandler for Sand
              Each session is bound to its creation environment.",
         );
 
-        // Add project info if configured
-        if let Some(project) = &self.config.project {
+        // Add project info if configured (env var or TOML)
+        if self.config.resolved_project_dir().is_some() {
             desc.push_str(&format!(
                 "\n\nProject directory mounted at {} (read-only).",
-                project.mount_point
+                self.config.project_mount()
             ));
-
-            if project.use_flake {
-                desc.push_str("\nProject's devShell available as 'project' environment.");
-            }
         }
 
         ServerInfo {

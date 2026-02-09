@@ -89,8 +89,16 @@ impl Config {
 
     /// Resolve the project directory to an absolute path.
     ///
-    /// If `project.path` is relative, resolves it against the current working directory.
+    /// Priority: `PROJECT_DIR` env var > TOML `[project]` config.
     pub fn resolved_project_dir(&self) -> Option<PathBuf> {
+        // Env var takes priority (MCP-conventional configuration)
+        if let Ok(dir) = std::env::var("PROJECT_DIR") {
+            let path = PathBuf::from(&dir);
+            if path.is_dir() {
+                return Some(path);
+            }
+        }
+        // Fall back to TOML config
         self.project.as_ref().map(|p| {
             if p.path.is_absolute() {
                 p.path.clone()
@@ -101,11 +109,15 @@ impl Config {
     }
 
     /// Get the project mount point inside the sandbox.
+    ///
+    /// Priority: `PROJECT_MOUNT` env var > TOML config > default `/project`.
     pub fn project_mount(&self) -> String {
-        self.project
-            .as_ref()
-            .map(|p| p.mount_point.clone())
-            .unwrap_or_else(|| "/project".into())
+        std::env::var("PROJECT_MOUNT").unwrap_or_else(|_| {
+            self.project
+                .as_ref()
+                .map(|p| p.mount_point.clone())
+                .unwrap_or_else(|| "/project".into())
+        })
     }
 
     /// Scan a directory for sandbox artifacts and return discovered environments.
@@ -490,6 +502,51 @@ mod tests {
         config.merge_environments(envs);
         assert_eq!(config.environments["python"].exec, "/custom/bin/run");
         assert_eq!(config.environments["ruby"].exec, "/custom-ruby/bin/run");
+    }
+
+    #[test]
+    fn resolved_project_dir_from_config() {
+        let json = r#"{
+            "environments": {},
+            "project": {
+                "path": "/home/user/myproject",
+                "mount_point": "/project"
+            }
+        }"#;
+        let config = Config::from_json(json).unwrap();
+        // Falls back to config when PROJECT_DIR is not set
+        assert_eq!(
+            config.resolved_project_dir(),
+            Some(PathBuf::from("/home/user/myproject"))
+        );
+    }
+
+    #[test]
+    fn resolved_project_dir_none_without_config() {
+        let json = r#"{"environments": {}}"#;
+        let config = Config::from_json(json).unwrap();
+        assert!(config.resolved_project_dir().is_none());
+    }
+
+    #[test]
+    fn project_mount_from_config() {
+        let json = r#"{
+            "environments": {},
+            "project": {
+                "path": "/tmp",
+                "mount_point": "/custom-mount"
+            }
+        }"#;
+        let config = Config::from_json(json).unwrap();
+        // Falls back to config mount_point when PROJECT_MOUNT is not set
+        assert_eq!(config.project_mount(), "/custom-mount");
+    }
+
+    #[test]
+    fn project_mount_default() {
+        let json = r#"{"environments": {}}"#;
+        let config = Config::from_json(json).unwrap();
+        assert_eq!(config.project_mount(), "/project");
     }
 
     #[test]

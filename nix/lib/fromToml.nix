@@ -16,21 +16,9 @@ let
   # Get the directory containing the config file (for resolving relative paths)
   configDir = builtins.dirOf configPath;
 
-  # Resolve project path if configured
-  # For "." or relative paths, resolve relative to config directory
-  # Note: builtins.path copies the path to the store - this makes builds reproducible
-  # and ensures the project is always mounted readonly (Nix store is immutable)
-  projectPath = if config ? project then
-    let
-      rawPath = config.project.path or ".";
-      # Resolve relative to config directory
-      resolvedPath = if rawPath == "." then configDir
-                     else if builtins.substring 0 1 rawPath == "/" then rawPath
-                     else configDir + "/" + rawPath;
-    in builtins.toString (builtins.path { path = resolvedPath; name = "project"; })
-  else null;
-
-  projectMount = if config ? project then config.project.mount_point or "/project" else "/project";
+  # Project mounting happens at runtime via PROJECT_DIR env var.
+  # Only resolve path here for use_flake (build-time devShell evaluation).
+  projectPath = null;
 
   # Preset interpreter mappings (interpreter command and stdinMode)
   presetInterpreters = {
@@ -127,19 +115,21 @@ let
           # Default for flake environments
           { interpreter = "bash -s"; stdinMode = "pipe"; };
 
-      # Build the jailed environment with project mounting (always readonly)
+      # Build the jailed environment with runtime project mounting
       jailedEnv = jailBackend.mkJailedEnv {
-        inherit name projectPath projectMount;
+        inherit name;
         env = baseEnv;
         interpreter = interpreterConfig.interpreter;
         stdinMode = interpreterConfig.stdinMode;
+        runtimeProjectMount = true;
       };
 
       # Build session variant (if agent is available)
       sessionJailedEnv = if agentPkg != null then
         jailBackend.mkSessionJailedEnv {
-          inherit name projectPath projectMount;
+          inherit name;
           env = baseEnv;
+          runtimeProjectMount = true;
         }
       else null;
 
@@ -167,7 +157,7 @@ let
   projectEnvironment =
     if (config.project.use_flake or false) then
       let
-        # Resolve the project path
+        # Resolve the project path (needed for flake evaluation at build time)
         rawPath = config.project.path or ".";
         resolvedPath = if rawPath == "." then configDir
                        else if builtins.substring 0 1 rawPath == "/" then rawPath
@@ -201,12 +191,13 @@ let
         # Environment variables to inherit
         inheritVars = config.project.inherit_env.vars or [];
 
-        # Build the jailed environment
+        # Build the jailed environment with runtime project mounting
         jailedEnv = jailBackend.mkJailedEnv {
           name = "project";
-          inherit env projectPath projectMount inheritVars;
+          inherit env inheritVars;
           interpreter = "bash -s";
           stdinMode = "pipe";
+          runtimeProjectMount = true;
         };
 
         # Config values with defaults
@@ -217,7 +208,7 @@ let
           jailBackend.mkSessionJailedEnv {
             name = "project";
             env = env;
-            inherit projectPath projectMount;
+            runtimeProjectMount = true;
           }
         else null;
       in {
@@ -248,15 +239,6 @@ let
   # Generate environment metadata (exec paths, timeouts, etc.)
   envMetadata = builtins.mapAttrs (_: e: e.meta) environments;
 
-  # Build project config for daemon (if configured)
-  # Note: Project is always mounted readonly for security and reproducibility
-  projectConfig = if config ? project then {
-    path = config.project.path or ".";
-    mount_point = config.project.mount_point or "/project";
-    use_flake = config.project.use_flake or false;
-    inherit_env = config.project.inherit_env or { vars = []; };
-  } else null;
-
   # Session config for daemon (if configured)
   sessionConfig = if config ? session then {
     idle_timeout_seconds = config.session.idle_timeout_seconds or 300;
@@ -264,11 +246,10 @@ let
   } else null;
 
   # Full metadata structure expected by daemon
-  # Shape: { environments: {...}, project?: {...}, session?: {...} }
+  # Shape: { environments: {...}, session?: {...} }
   fullMetadata = {
     environments = envMetadata;
-  } // (if projectConfig != null then { project = projectConfig; } else {})
-    // (if sessionConfig != null then { session = sessionConfig; } else {});
+  } // (if sessionConfig != null then { session = sessionConfig; } else {});
 
   metadataJson = builtins.toJSON fullMetadata;
 

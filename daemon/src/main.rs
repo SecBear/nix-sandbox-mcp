@@ -79,12 +79,12 @@ async fn main() -> Result<()> {
     // Initialize backend
     let backend = JailBackend::new();
 
-    // Initialize session manager
+    // Initialize session manager (TOML config takes priority, then env vars)
     let session_config = config
         .session
         .as_ref()
         .map(SessionConfig::from_toml)
-        .unwrap_or_default();
+        .unwrap_or_else(SessionConfig::from_env);
     let session_manager = Arc::new(SessionManager::new(session_config));
 
     if args.stdio {
