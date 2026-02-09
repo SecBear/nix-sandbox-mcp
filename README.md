@@ -176,6 +176,7 @@ internals.
 | 2c    | Done    | Decoupled sandboxes (`mkSandbox`, directory scanning)  |
 | 2d    | Done    | MCP-conventional config (env vars, `NIX_SANDBOX_ENVS`) |
 | 3     | Planned | microvm.nix backend for hardware-level isolation       |
+| 3     | Planned | Dead interpreter recovery (restart bash/node on crash) |
 
 ## License
 
