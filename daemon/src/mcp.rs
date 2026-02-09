@@ -51,6 +51,22 @@ pub struct RunParams {
     pub session: Option<String>,
 }
 
+/// Maximum output size returned to the MCP client (1 MB).
+const MAX_OUTPUT_SIZE: usize = 1024 * 1024;
+
+/// Truncate a string to a byte-safe limit, appending a marker if truncated.
+fn truncate_output(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    // Find a char boundary at or before max_bytes
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n\n[truncated — output exceeded 1MB]", &s[..end])
+}
+
 /// Format an execution result into an MCP `CallToolResult`.
 fn format_result(exit_code: i32, stdout: String, stderr: String) -> CallToolResult {
     let is_error = exit_code != 0;
@@ -62,6 +78,8 @@ fn format_result(exit_code: i32, stdout: String, stderr: String) -> CallToolResu
     } else {
         format!("{stdout}\n--- stderr ---\n{stderr}")
     };
+
+    let output = truncate_output(&output, MAX_OUTPUT_SIZE);
 
     if is_error {
         CallToolResult::error(vec![Content::text(output)])

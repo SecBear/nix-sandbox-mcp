@@ -99,18 +99,30 @@ impl Transport for StdioPipeTransport {
         let mut stdout = self.stdout.lock().await;
 
         let req_bytes = serde_json::to_vec(req).context("Failed to serialize request")?;
-        send_message(&mut *stdin, &req_bytes)
-            .await
-            .context("Failed to send request to agent")?;
 
-        let resp_bytes = recv_message(&mut *stdout)
-            .await
-            .context("Failed to read response from agent")?;
+        let io_result: Result<AgentResponse> = async {
+            send_message(&mut *stdin, &req_bytes)
+                .await
+                .context("Failed to send request to agent")?;
 
-        let resp: AgentResponse =
-            serde_json::from_slice(&resp_bytes).context("Failed to parse agent response")?;
+            let resp_bytes = recv_message(&mut *stdout)
+                .await
+                .context("Failed to read response from agent")?;
 
-        Ok(resp)
+            serde_json::from_slice(&resp_bytes).context("Failed to parse agent response")
+        }
+        .await;
+
+        if io_result.is_err() {
+            // Check if the agent process died
+            let mut child = self.child.lock().await;
+            if let Ok(Some(status)) = child.try_wait() {
+                self.alive.store(false, Ordering::Relaxed);
+                anyhow::bail!("Agent process exited unexpectedly (status: {status})");
+            }
+        }
+
+        io_result
     }
 
     async fn shutdown(&self) -> Result<()> {

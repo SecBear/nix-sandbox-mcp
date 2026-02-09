@@ -8,7 +8,7 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::{debug, instrument};
 
@@ -65,17 +65,39 @@ impl IsolationBackend for JailBackend {
             .context("Failed to write code to stdin")?;
         drop(stdin); // Close stdin to signal EOF
 
-        // Wait for completion with timeout
+        // Take pipe handles out so `child` stays in scope for kill-on-timeout
+        let mut child_stdout = child.stdout.take().context("Failed to open stdout")?;
+        let mut child_stderr = child.stderr.take().context("Failed to open stderr")?;
+
+        // Read stdout+stderr concurrently, under the timeout.
+        // `child` is NOT moved into this future, so we can kill it on timeout.
         let timeout_duration = std::time::Duration::from_secs(env.timeout_seconds);
-        let output = tokio::time::timeout(timeout_duration, child.wait_with_output())
-            .await
-            .map_err(|_| anyhow::anyhow!("Command timed out after {}s", env.timeout_seconds))?
-            .context("Failed to wait for process")?;
+        let read_all = async {
+            let mut stdout_buf = Vec::new();
+            let mut stderr_buf = Vec::new();
+            let (r1, r2) = tokio::join!(
+                child_stdout.read_to_end(&mut stdout_buf),
+                child_stderr.read_to_end(&mut stderr_buf),
+            );
+            r1.context("Failed to read stdout")?;
+            r2.context("Failed to read stderr")?;
+            Ok::<_, anyhow::Error>((stdout_buf, stderr_buf))
+        };
+
+        let (stdout_buf, stderr_buf) =
+            if let Ok(result) = tokio::time::timeout(timeout_duration, read_all).await {
+                result?
+            } else {
+                let _ = child.kill().await;
+                anyhow::bail!("Command timed out after {}s", env.timeout_seconds);
+            };
+
+        let status = child.wait().await.context("Failed to wait for process")?;
 
         let result = ExecutionResult {
-            exit_code: output.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            exit_code: status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&stdout_buf).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr_buf).into_owned(),
         };
 
         debug!(exit_code = result.exit_code, "Execution completed");

@@ -135,6 +135,10 @@ class BashInterpreter:
                         pass
                 break
             stdout_lines.append(decoded)
+        else:
+            # readline returned b"" — pipe closed, process died
+            if self.proc.poll() is not None:
+                return "".join(stdout_lines), "bash process died unexpectedly", 1
 
         # Read stderr until marker
         stderr_lines = []
@@ -214,6 +218,9 @@ class NodeInterpreter:
             if stdout_marker in decoded:
                 break
             stdout_lines.append(decoded)
+        else:
+            if self.proc.poll() is not None:
+                return "".join(stdout_lines), "node process died unexpectedly", 1
 
         stderr_lines = []
         for line in iter(self.proc.stderr.readline, b""):
@@ -225,7 +232,7 @@ class NodeInterpreter:
 
         stdout = "".join(stdout_lines)
         stderr = "".join(stderr_lines)
-        exit_code = 1 if stderr else 0
+        exit_code = 1 if "Uncaught" in stderr else 0
         return stdout, stderr, exit_code
 
     def close(self):
@@ -252,10 +259,9 @@ def dispatch_execute(interpreters: dict, interpreter_name: str, code: str) -> di
     Lazily creates interpreter instances on first use and caches them.
     Returns a dict with stdout, stderr, exit_code.
     """
-    # check valid interpreter
     if interpreter_name not in INTERPRETER_CLASSES:
-    # if not valid, return error dict
-        return {"stdout": "", "stderr":"Error: invalid interpreter.", "exit_code": 1}
+        valid = ", ".join(sorted(INTERPRETER_CLASSES))
+        return {"stdout": "", "stderr": f"Error: unknown interpreter '{interpreter_name}'. Valid: {valid}", "exit_code": 1}
     # if valid, and not created, call the constructor
     if interpreter_name not in interpreters:
         interpreters[interpreter_name] = INTERPRETER_CLASSES[interpreter_name]()

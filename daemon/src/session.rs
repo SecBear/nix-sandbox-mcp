@@ -110,9 +110,9 @@ impl Session {
 
     /// Send a request to the agent and return the response.
     async fn request(&self, req: &AgentRequest) -> Result<AgentResponse> {
+        let resp = self.transport.lock().await.request(req).await?;
         *self.last_used.lock().await = Instant::now();
-        let transport = self.transport.lock().await;
-        transport.request(req).await
+        Ok(resp)
     }
 
     /// Check if the agent process is still alive.
@@ -220,9 +220,15 @@ impl SessionManager {
             code: code.to_string(),
         };
 
-        let resp = session
-            .request(&req)
+        let timeout = Duration::from_secs(env_meta.timeout_seconds);
+        let resp = tokio::time::timeout(timeout, session.request(&req))
             .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Session execution timed out after {}s",
+                    env_meta.timeout_seconds
+                )
+            })?
             .context("Failed to communicate with session agent")?;
 
         match resp {
