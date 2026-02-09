@@ -41,7 +41,9 @@ nix-sandbox-mcp/
 │       ├── config.rs                 # Metadata parsing, sandbox discovery, env var config
 │       ├── mcp.rs                    # MCP server, run tool handler
 │       ├── session.rs                # Session lifecycle, reaper task
-│       ├── backend.rs                # Backend trait + JailBackend
+│       ├── backend.rs                # Backend trait, ExecutionResult
+│       ├── backend/
+│       │   └── jail.rs              # JailBackend (bubblewrap process spawning)
 │       └── transport/                # Agent IPC (length-prefixed JSON over pipes)
 │
 ├── agent/
@@ -75,7 +77,7 @@ Configuration is split into two layers:
 - `NIX_SANDBOX_ENVS` — on-the-fly custom environment building
 - `NIX_SANDBOX_DIR` — pre-built sandbox directory
 
-The split follows MCP convention: runtime settings go in the client JSON (`"env": {...}`), build-time settings go in the Nix layer. The daemon reads env vars with fallback to TOML metadata, so existing configs keep working.
+The split follows MCP convention: runtime settings go in the client JSON (`"env": {...}`), build-time settings go in the Nix layer. The daemon reads TOML metadata first with fallback to env vars, so existing configs keep working.
 
 ### How `NIX_SANDBOX_ENVS` works
 
