@@ -13,8 +13,11 @@ no image pulls.
 
 ## Quick Start
 
-[Nix with flakes](https://nixos.org/download/) on Linux. Add to your MCP client
-config:
+**Requirements:** Linux with [Nix (flakes enabled)](https://nixos.org/download/).
+The sandbox uses bubblewrap + Linux namespaces for isolation — macOS and Windows
+are not supported. WSL2 may work if your kernel has user namespaces enabled.
+
+Add to your MCP client config:
 
 ```json
 {
