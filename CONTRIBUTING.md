@@ -53,8 +53,7 @@ nix-sandbox-mcp/
 │   │   └── jail.nix                  # jail.nix backend (mkJailedEnv + mkSessionJailedEnv)
 │   └── lib/
 │       ├── mkSandbox.nix             # Public API: build standalone sandbox artifacts
-│       ├── fromToml.nix              # Parse TOML config, build all envs
-│       └── mkMetadata.nix            # Generate environments.json
+│       └── fromToml.nix              # Parse TOML config, build all envs + metadata
 │
 ├── config.example.toml               # Build-time configuration (environment definitions)
 ├── flake.nix                         # Entry point, wrapper script, lib.mkSandbox

@@ -132,7 +132,7 @@ or baking additional environments into the server at build time.
 
 **jail.nix (namespace isolation)** — the current backend. Uses bubblewrap to
 create unprivileged sandboxes with separate user, PID, network, and mount
-namespaces plus seccomp-bpf syscall filtering. No network access by default.
+namespaces. No network access by default.
 Project files are mounted read-only. This protects against accidental damage and
 opportunistic malicious code. It does _not_ protect against kernel exploits —
 the sandbox shares the host kernel.
@@ -175,8 +175,8 @@ internals.
 | 2b    | Done    | Session persistence (Python, Bash, Node REPLs)         |
 | 2c    | Done    | Decoupled sandboxes (`mkSandbox`, directory scanning)  |
 | 2d    | Done    | MCP-conventional config (env vars, `NIX_SANDBOX_ENVS`) |
-| 3     | Planned | microvm.nix backend for hardware-level isolation       |
-| 3     | Planned | Dead interpreter recovery (restart bash/node on crash) |
+| 3a    | Planned | microvm.nix backend for hardware-level isolation       |
+| 3b    | Planned | Dead interpreter recovery (restart bash/node on crash) |
 
 ## License
 
