@@ -2,8 +2,8 @@
 
 ## Prerequisites
 
-- **Nix with flakes enabled** — The project uses Nix flakes exclusively
-- **Rust toolchain** — Managed by the flake devShell (`nix develop`)
+- **Nix with flakes enabled** — the project uses Nix flakes exclusively
+- **Rust toolchain** — managed by the flake devShell (`nix develop`)
 - **Linux** — jail.nix requires Linux namespaces (user, PID, mount, network)
 
 ## Building
@@ -19,7 +19,7 @@ cd daemon && cargo build
 nix develop
 ```
 
-**Important**: Nix flakes only see git-tracked files. You must `git add` new files before `nix build` will see them. This is the most common "why isn't my change picked up?" issue.
+**Common pitfall**: Nix flakes only see git-tracked files. You must `git add` new files before `nix build` will pick them up.
 
 ## Testing
 
@@ -35,63 +35,78 @@ nix flake check
 
 ```
 nix-sandbox-mcp/
-├── daemon/                           # Rust MCP server (rmcp crate)
+├── daemon/                           # Rust MCP daemon (rmcp crate)
 │   └── src/
-│       ├── main.rs                   # Entry point, loads metadata, scans sandbox dir
-│       ├── config.rs                 # Parse metadata, scan sandbox artifacts, merge envs
+│       ├── main.rs                   # Entry point, config loading, sandbox scanning
+│       ├── config.rs                 # Metadata parsing, sandbox discovery, env var config
 │       ├── mcp.rs                    # MCP server, run tool handler
-│       ├── session.rs                # Session lifecycle management
+│       ├── session.rs                # Session lifecycle, reaper task
 │       ├── backend.rs                # Backend trait + JailBackend
-│       └── transport/                # Agent IPC (length-prefixed JSON)
+│       └── transport/                # Agent IPC (length-prefixed JSON over pipes)
 │
 ├── agent/
 │   └── sandbox_agent.py              # Persistent interpreter for sessions
 │
 ├── nix/
-│   ├── environments/                 # Bundled preset definitions
-│   │   ├── shell.nix
-│   │   ├── python.nix
-│   │   ├── node.nix
-│   │   └── default.nix
+│   ├── environments/                 # Bundled preset definitions (shell, python, node)
 │   ├── backends/
-│   │   ├── jail.nix                  # jail.nix backend (mkJailedEnv + mkSessionJailedEnv)
-│   │   └── microvm.nix              # microvm.nix backend (planned)
+│   │   └── jail.nix                  # jail.nix backend (mkJailedEnv + mkSessionJailedEnv)
 │   └── lib/
-│       ├── mkSandbox.nix             # Build standalone sandbox artifacts (Phase 2c)
-│       ├── mkEnvironment.nix         # env def + backend -> built artifact
+│       ├── mkSandbox.nix             # Public API: build standalone sandbox artifacts
 │       ├── fromToml.nix              # Parse TOML config, build all envs
 │       └── mkMetadata.nix            # Generate environments.json
 │
-├── config.example.toml               # Reference configuration
-├── flake.nix                         # Main entry point (exposes lib.mkSandbox)
+├── config.example.toml               # Build-time configuration (environment definitions)
+├── flake.nix                         # Entry point, wrapper script, lib.mkSandbox
 └── flake.lock
 ```
 
-## Architecture: Sandbox Artifacts (Phase 2c)
+## Configuration Architecture
 
-Custom sandboxes are standalone Nix derivations with a standard layout:
+Configuration is split into two layers:
+
+**Build-time (Nix, TOML)** — things that require Nix evaluation:
+- `[environments.*]` — which presets/flakes to build
+- `[defaults]` — timeout_seconds, memory_mb
+- `[project] use_flake = true` — create env from project's devShell
+
+**Runtime (env vars)** — things the MCP client controls:
+- `PROJECT_DIR` / `PROJECT_MOUNT` — project directory mounting
+- `SESSION_IDLE_TIMEOUT` / `SESSION_MAX_LIFETIME` — session timeouts
+- `NIX_SANDBOX_ENVS` — on-the-fly custom environment building
+- `NIX_SANDBOX_DIR` — pre-built sandbox directory
+
+The split follows MCP convention: runtime settings go in the client JSON (`"env": {...}`), build-time settings go in the Nix layer. The daemon reads env vars with fallback to TOML metadata, so existing configs keep working.
+
+### How `NIX_SANDBOX_ENVS` works
+
+The shell wrapper script in `flake.nix` handles this *before* exec'ing the daemon:
+
+1. Creates a temp directory
+2. Symlinks any existing `$NIX_SANDBOX_DIR` entries into it
+3. Runs `nix build $flakeref -o $tmpdir/env-$j` for each comma-separated ref
+4. Exports `NIX_SANDBOX_DIR=$tmpdir`
+
+The daemon's existing scanner picks up the results. It has no knowledge of `NIX_SANDBOX_ENVS` — the wrapper translates it into a directory of sandbox artifacts, which is an interface the daemon already understands.
+
+### How project mounting works
+
+All environments use `runtimeProjectMount = true` in jail.nix. This means the bwrap wrapper checks `$PROJECT_DIR` at invocation time and adds `--ro-bind "$PROJECT_DIR" "$PROJECT_MOUNT"`. The sandbox derivations are project-agnostic — same Nix store path regardless of which project gets mounted.
+
+## Sandbox Artifact Format
+
+Custom sandboxes (from `mkSandbox` or `NIX_SANDBOX_ENVS`) are Nix derivations with a standard layout:
 
 ```
 /nix/store/xxx-sandbox-data-science/
   metadata.json       # {name, interpreter_type, timeout_seconds, memory_mb}
-  bin/run             # Ephemeral execution (jailed via bubblewrap)
-  bin/session-run     # Session execution (jailed, runs sandbox_agent.py)
+  bin/run             # Ephemeral execution wrapper (jailed)
+  bin/session-run     # Session execution wrapper (jailed, runs sandbox_agent.py)
 ```
 
-**Discovery flow:**
-1. Daemon starts → scans `$NIX_SANDBOX_DIR` or `~/.config/nix-sandbox-mcp/sandboxes/`
-2. Each subdirectory is parsed: read `metadata.json`, verify `bin/run` exists
-3. Discovered environments are merged with bundled presets (custom overrides on collision)
-4. Adding/removing sandboxes requires restarting the MCP server
+The daemon scans `$NIX_SANDBOX_DIR`, reads `metadata.json` from each subdirectory, verifies `bin/run` exists, and merges discovered environments with bundled presets (custom overrides on name collision).
 
-**Build-time vs runtime project mounting:**
-- **Bundled presets** (via `fromToml.nix`): use `c.ro-bind` — project path baked into the derivation at build time
-- **mkSandbox artifacts**: use `c.add-runtime` — check `$PROJECT_DIR` env var at bwrap invocation time
-- This means mkSandbox artifacts are project-agnostic: same Nix store path, different projects
-
-**`interpreter_type`** maps custom environments to agent interpreters. The agent supports exactly three: `python`, `bash`, `node`. A "data-science" sandbox with `interpreter_type = "python"` uses the Python interpreter with custom packages on PATH.
-
-## Architecture: Session Persistence
+## Session Architecture
 
 End-to-end flow for a session `run` call:
 
@@ -112,55 +127,46 @@ MCP client
   ← JSON-RPC result
 ```
 
-### Key Design Decisions
+### Key decisions
 
-- **Length-prefixed JSON protocol** (4-byte big-endian + payload), not newline-delimited — code output can contain newlines
+- **Length-prefixed JSON** (4-byte big-endian + payload), not newline-delimited — code output can contain newlines
 - **Stdin/stdout pipes**, not Unix sockets — simpler, works inside namespaced jails
-- **Per-session Mutex** — Serializes concurrent requests to the same session in arrival order
-- **Real stdin/stdout saved at agent startup** — `sandbox_agent.py` saves the real file descriptors, then replaces `sys.stdout` with `/dev/null` so interpreter output doesn't corrupt the protocol
-- **Lazy interpreter instantiation** — Interpreters are created on first use within a session, not at session creation
+- **Per-session Mutex** — serializes concurrent requests to the same session
+- **Real stdin/stdout saved at agent startup** — `sandbox_agent.py` replaces `sys.stdout` with `/dev/null` so interpreter output doesn't corrupt the protocol
+- **Lazy interpreter instantiation** — interpreters are created on first use, not at session creation
 
-## Interpreter Implementation Guide
+### Interpreter implementation
 
-Each interpreter (Python, Bash, Node) is a long-lived subprocess (or exec namespace) managed by `sandbox_agent.py`. They share a common pattern:
+Each interpreter (Python, Bash, Node) is a long-lived subprocess managed by `sandbox_agent.py`. They share a pattern:
 
-1. **Nonce-based markers** — A random nonce is generated per execution. Markers like `__SANDBOX_STDOUT_{nonce}__` delimit where captured output begins/ends
-2. **Separate stdout/stderr** — Each stream is captured independently using the marker protocol
-3. **Exit code reporting** — Reported via a dedicated marker in the output stream
+1. **Nonce-based markers** — random nonce per execution, markers delimit captured output
+2. **Separate stdout/stderr** — each stream captured independently
+3. **Exit code reporting** — via dedicated marker in the output stream
 
-### Python
-Uses `exec()` in a shared namespace dictionary — no subprocess needed. Variables, imports, and definitions persist across calls.
+**Python**: Uses `exec()` in a shared namespace dict. No subprocess needed.
+**Bash**: Persistent `bash` subprocess. Commands wrapped with echo markers.
+**Node**: Custom REPL — see gotchas below.
 
-### Bash
-Persistent `bash` subprocess. Commands are wrapped with `echo` markers and the exit code is captured via `$?`.
-
-### Node.js
-Custom REPL configuration — see gotchas below for the many subtleties.
-
-## Gotchas & Lessons Learned
+## Gotchas
 
 ### Node.js REPL
 
-1. **`node -e` doesn't initialize stdin as a readable stream** when stdin is a pipe. The REPL needs a proper readable stdin to accept input. Workaround: write the REPL setup script to a temp file and run `node <file>` instead. The file is written to `$TMPDIR` (which the jail sets to the per-session `/workspace` tmpfs) to avoid path collisions between concurrent sessions.
+1. `node -e` doesn't initialize stdin as readable when stdin is a pipe. Write REPL setup to a temp file and run `node <file>` instead.
+2. The REPL overrides `context.console`. Restore it after creation with `new Console(process.stdout, process.stderr)`.
+3. `process.stdout.write()` bypasses REPL routing; `console.log()` does not. Protocol markers must use `process.stdout.write()`.
+4. `try/catch` wrapping creates block scope, preventing `let`/`const` from persisting. Send code directly to the REPL instead.
+5. `.break` cancels pending multiline mode. Send it after user code to ensure markers execute immediately.
 
-2. **The REPL overrides `context.console`** to route output through its own `output` stream. This means `console.log()` in user code goes through the REPL's writer (which we suppress). Fix: after creating the REPL, restore console with `new Console(process.stdout, process.stderr)` so user code output works normally.
+### Nix
 
-3. **`process.stdout.write()` bypasses REPL output routing; `console.log()` does not.** Our REPL config sets `writer: () => ''` to suppress result echoing. Protocol markers must use `process.stdout.write()` directly to guarantee they appear in the output stream regardless of REPL configuration.
-
-4. **`try/catch` wrapping creates block scope**, which prevents `let`/`const` declarations from persisting across executions. In JavaScript, `let x = 1` inside a `try {}` block is scoped to that block. Solution: send user code directly to the REPL without wrapping, and infer the exit code from stderr presence instead.
-
-5. **`.break` cancels pending multiline mode.** If user code has an unclosed bracket or incomplete expression, the REPL enters multiline mode and treats subsequent input as continuation — including our marker commands. Sending `.break` after user code forces the REPL back to normal mode so markers execute immediately.
-
-### Nix Flakes
-
-- **Flakes only see git-tracked files** — `git add` before `nix build`. This is the #1 source of "my changes aren't showing up" confusion.
-- **The `debug` attr in flake.nix** is a custom `perSystem` attribute, not accessible via `nix eval .#debug`. Use `nix eval .#debug.x86_64-linux` or similar.
+- Flakes only see git-tracked files — `git add` before `nix build`.
+- The `debug` attr in flake.nix is a custom `perSystem` attribute, not accessible via `nix eval .#debug`. Use `nix eval .#debug.x86_64-linux`.
 
 ### Concurrency
 
-- **rmcp dispatches `tool/call` requests as concurrent tokio tasks** — Multiple MCP calls can arrive and execute simultaneously.
-- **Per-session mutexes serialize execution but don't guarantee wire-order** — Tokio task scheduling is non-deterministic; the first-spawned task isn't necessarily the first to acquire the lock.
-- **Testing implication** — Use proper request-response cycling (send request, read response, then send next) rather than assuming ordering from concurrent sends.
+- rmcp dispatches `tool/call` requests as concurrent tokio tasks.
+- Per-session mutexes serialize execution but don't guarantee wire-order — tokio task scheduling is non-deterministic.
+- In tests: use proper request-response cycling, don't assume ordering from concurrent sends.
 
 ## Submitting Changes
 
