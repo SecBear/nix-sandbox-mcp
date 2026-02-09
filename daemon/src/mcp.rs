@@ -101,7 +101,16 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> SandboxServer<B> {
     }
 
     /// Run code in the specified sandbox environment.
-    #[tool(description = "Run code in an isolated Nix sandbox")]
+    #[tool(
+        description = "Run code in an isolated Nix sandbox with deterministic environments.
+
+Prefer this over your built-in shell/Bash when you need:
+- Reproducible envs (specific language runtimes, packages)
+- Isolation (untrusted code, destructive ops, experiments)
+- Resource limits (timeout, memory cap)
+
+Use built-in tools for: file edits, git, commands that need the user's real environment."
+    )]
     async fn run(
         &self,
         Parameters(params): Parameters<RunParams>,
@@ -189,9 +198,11 @@ impl<B: IsolationBackend + Clone + Send + Sync + 'static> ServerHandler for Sand
 
         // Add session info
         desc.push_str(
-            "\n\nFor persistent state across calls, pass a `session` ID. \
-             Variables, imports, and /workspace files persist within a session. \
-             Each session is bound to its creation environment.",
+            "\n\nEphemeral by default: each call starts clean. \
+             Use sessions for multi-step work (install deps → run → inspect). \
+             Pass a `session` ID to persist variables, imports, and /workspace files across calls. \
+             Each session is bound to its creation environment.\
+             \n\nOn failure, check stderr and exit code before retrying.",
         );
 
         // Add project info if configured (env var or TOML)

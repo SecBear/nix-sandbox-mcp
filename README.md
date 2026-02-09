@@ -169,6 +169,53 @@ from.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions, repo layout, and
 internals.
 
+## Design: Context Budget
+
+MCP servers pay a token tax: every tool schema is injected into the LLM's
+context window at connection time. A server exposing 60 tools can burn ~47k
+tokens before the user says anything. This matters because context is finite
+and expensive — tokens spent on tool definitions are tokens unavailable for
+reasoning.
+
+**Common approaches and their costs:**
+
+| Approach | Init cost | Trade-off |
+| --- | --- | --- |
+| Static loading (all tools upfront) | ~150 tokens × N tools | Context bloat scales linearly with tool count |
+| Dynamic discovery (list → schema → call) | ~400 tokens fixed | Extra round-trips per invocation; LLM must learn discovery protocol |
+| Skill/guide documents (SKILL.md) | ~800 tokens on activation | Rich guidance but heavy; separate document to maintain |
+
+**Our approach: one parameterized tool.**
+
+nix-sandbox-mcp exposes a single `run` tool that takes an `env` parameter.
+Adding environments (python, node, shell, custom flakes) doesn't add tools —
+it adds a value to a parameter. The fixed context cost is ~420 tokens
+regardless of how many environments are configured:
+
+| Component | Tokens | What it contains |
+| --- | --- | --- |
+| Tool schema | ~75 | Name, params (`code`, `env`, `session`), selection guidance |
+| Server instructions | ~160 | Environment list, session workflow, debugging hints |
+| Per-parameter descriptions | ~80 | Field-level usage hints via JSON Schema |
+| **Total** | **~420** | Constant — does not grow with environment count |
+
+Compare: if each environment were a separate tool (3 bundled + 5 custom = 8
+tools), that would cost ~1,200+ tokens and grow with every environment added.
+
+**Where guidance lives:**
+
+Rather than a separate guidance document, tool-selection and workflow hints are
+embedded directly in the MCP protocol fields that LLMs already read:
+
+- **Tool description** — when to use the sandbox vs built-in shell (isolation,
+  reproducibility, resource limits vs file edits, git, host commands)
+- **Server instructions** — available environments, session lifecycle
+  (ephemeral by default, sessions for multi-step work), debugging hints
+- **Parameter descriptions** — per-field usage via JSON Schema `description`
+
+This keeps all guidance in-band and co-located with the tool definition. No
+extra documents to load, no discovery protocol to learn, no activation step.
+
 ## Roadmap
 
 | Phase | Status  | What                                                   |
